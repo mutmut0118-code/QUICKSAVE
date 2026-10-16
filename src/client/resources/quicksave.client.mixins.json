@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"package": "com.muto118.quicksave.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"DeathScreenAccessor",
+		"MinecraftClientMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

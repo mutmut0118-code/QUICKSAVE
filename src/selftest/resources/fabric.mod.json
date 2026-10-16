@@ -1,0 +1,15 @@
+{
+	"schemaVersion": 1,
+	"id": "quicksave-selftest",
+	"version": "0.0.0",
+	"name": "Quicksave Self-Test",
+	"description": "Dev-only harness: drives save -> change world -> die -> Load -> verify. Only loaded by ./gradlew runSelfTest.",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["com.muto118.quicksave.selftest.SelfTestClient"]
+	},
+	"depends": {
+		"quicksave": "*",
+		"fabric-api": "*"
+	}
+}

@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "quicksave",
+	"version": "${version}",
+	"name": "Quicksave",
+	"description": "Bethesda-style quicksaving for singleplayer. Death never respawns you: the world is closed, your last save is restored, and the world reopens.",
+	"authors": ["muto118"],
+	"contact": {},
+	"license": "All-Rights-Reserved",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["com.muto118.quicksave.QuicksaveMod"],
+		"client": ["com.muto118.quicksave.QuicksaveClient"]
+	},
+	"mixins": [
+		{
+			"config": "quicksave.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": "~1.21.1",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
