@@ -12,12 +12,12 @@ closes the world, restores your last save over it and reopens it, like Skyrim.
 
 ## Status
 
-**Current milestone: M2 done; PR open for the user's local test. Next: M3, only after the user confirms M2 works locally.**
+**Current milestone: M2 done and confirmed working by the user in a local game (2026-10-16). Next: M3.**
 
 | Milestone | State |
 | --- | --- |
 | M1 Proof of loop | Done, confirmed working by the user locally (2026-10-16). |
-| M2 Real UX | Done. `runSelfTest` passes all 25 steps headless. Awaiting the user's local test. |
+| M2 Real UX | Done, confirmed working by the user locally (2026-10-16). `runSelfTest` passes all 25 steps headless. |
 | M3 Content-addressed storage | Not started |
 | M4 Load menu + config screen | Not started |
 | M5 Pack hardening + Skyrim reskin | Not started |
@@ -97,8 +97,9 @@ autosave; revisit only if hitches are a problem.
 saw a brief, abrupt camera freeze during the save; the world otherwise looked fine. Load
 time felt "normal" (like opening the world from the menu). M2 shows the "Quicksaving..."
 toast 4 client ticks before the copy starts (`SaveRequests.TOAST_LEAD_TICKS`) so the hitch
-reads as intentional. Why the *client* camera hitches while the *server* thread copies is not
-yet understood (the render thread shouldn't wait on the server); worth profiling in M3.
+reads as intentional. **M2 local test: the user saw no freeze at all with F6.** The M1 freeze
+happened with `/qs save` typed in chat; the cause was never pinned down (the render thread
+shouldn't wait on the server). If it comes back on bigger worlds, profile it in M3.
 M3's incremental copy is the real fix and should cut it to tens of ms. Re-measure after M3
 on a bigger world.
 
