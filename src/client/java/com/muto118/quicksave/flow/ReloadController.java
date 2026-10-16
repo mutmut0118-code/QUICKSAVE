@@ -91,6 +91,8 @@ public final class ReloadController {
 		//    integrated server thread has stopped and closed its session.
 		state = State.CLOSING;
 		SaveRequests.reset();
+		// Closing the world to load must not trigger the "on quit" autosave.
+		AutosaveScheduler.suppressNextQuitAutosave();
 		try {
 			if (client.world != null) {
 				client.world.disconnect();

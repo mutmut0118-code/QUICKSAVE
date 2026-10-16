@@ -19,6 +19,7 @@
 	"quicksave.toast.saving": "Saving...",
 	"quicksave.toast.quicksaved": "Quicksaved",
 	"quicksave.toast.saved": "Game saved",
+	"quicksave.toast.autosaved": "Autosaved",
 	"quicksave.toast.took": "Took %s ms",
 	"quicksave.toast.failed": "Save failed",
 	"quicksave.toast.nothing_to_load": "No save to load",

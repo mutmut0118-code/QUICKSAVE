@@ -1,6 +1,8 @@
 package com.muto118.quicksave.selftest;
 
 import com.muto118.quicksave.QuicksaveMod;
+import com.muto118.quicksave.config.QuicksaveConfig;
+import com.muto118.quicksave.flow.AutosaveScheduler;
 import com.muto118.quicksave.flow.RecoveryPrompt;
 import com.muto118.quicksave.flow.ReloadController;
 import com.muto118.quicksave.flow.SaveRequests;
@@ -12,7 +14,9 @@ import com.muto118.quicksave.ui.QuicksaveDeathScreen;
 import com.muto118.quicksave.ui.SaveNameScreen;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.block.BedBlock;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.enums.BedPart;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.Element;
 import net.minecraft.client.gui.screen.ConfirmScreen;
@@ -41,8 +45,11 @@ import net.minecraft.text.TranslatableTextContent;
 import net.minecraft.util.Util;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
+import net.minecraft.world.World;
 import net.minecraft.world.gen.WorldPresets;
 import org.lwjgl.glfw.GLFW;
 
@@ -53,9 +60,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Drives Quicksave end to end inside a real client, one step per poll:
@@ -100,6 +109,8 @@ public class SelfTestClient implements ClientModInitializer {
 	private long deathScreenSeenAt = -1L;
 	private boolean sawCamPhase;
 	private boolean countdownShot;
+	private BlockPos bedPos;
+	private Set<String> slotsBefore = Set.of();
 	private boolean earlyCamShot;
 
 	@Override
@@ -129,7 +140,17 @@ public class SelfTestClient implements ClientModInitializer {
 			}
 			return false;
 		});
-		step("join world", (c, t) -> inWorld(c) && t > 100);
+		step("join world", (c, t) -> inWorld(c) && t > 20);
+		step("Start autosave on first join", (c, t) -> {
+			Optional<SnapshotStore.Slot> start = SnapshotStore.latest(worldName(c), List.of(SlotType.AUTO));
+			if (start.isPresent()) {
+				if (!"Start".equals(start.get().meta().name())) {
+					throw new IllegalStateException("first autosave isn't the Start save: " + start.get());
+				}
+				return true;
+			}
+			return false;
+		});
 		step("set up gold block and pig", (c, t) -> {
 			onServer(c, player -> {
 				ServerWorld world = player.getServerWorld();
@@ -236,6 +257,133 @@ public class SelfTestClient implements ClientModInitializer {
 			}
 			return false;
 		});
+		step("F6 three more times: rotation keeps 3 quicksaves", (c, t) -> {
+			// t 20/60/100: change the world a little, press F6; each save must finish before the next.
+			if (t == 20 || t == 60 || t == 100) {
+				int n = t / 40;
+				onServer(c, player -> {
+					player.getServerWorld().setBlockState(this.groundPos.add(-5, 0, n), Blocks.STONE.getDefaultState());
+					return null;
+				});
+			}
+			if (t == 21 || t == 61 || t == 101) {
+				this.resultBefore = SaveRequests.lastResult();
+				pressKey(GLFW.GLFW_KEY_F6);
+			}
+			if (t == 59 || t == 99 || t == 139) {
+				SaveService.Result result = SaveRequests.lastResult();
+				if (result == this.resultBefore || result == null || !result.success()) {
+					throw new IllegalStateException("F6 save did not finish: " + result);
+				}
+				log("quicksave " + result.slot() + ": " + result.outcome().stats() + " in " + result.millis()
+						+ " ms, rotated out " + result.outcome().rotatedOut());
+				if (result.outcome().stats().hashed() >= result.outcome().stats().files()) {
+					throw new IllegalStateException("incremental save re-read every file: " + result.outcome().stats());
+				}
+			}
+			if (t == 140) {
+				long quick = countSlots(c, SlotType.QUICK);
+				if (quick != 3) {
+					throw new IllegalStateException("expected 3 rotating quicksaves, found " + quick);
+				}
+				return true;
+			}
+			return false;
+		});
+		step("timer autosave", (c, t) -> {
+			if (t == 1) {
+				this.slotsBefore = slotIds(c);
+				AutosaveScheduler.testIntervalTicks = 60;
+			}
+			SnapshotStore.Slot made = newSlot(c);
+			if (made != null) {
+				AutosaveScheduler.testIntervalTicks = 0;
+				expectAuto(made, "Autosave", "minecraft:overworld");
+				return true;
+			}
+			return false;
+		});
+		step("dimension change autosave (Nether)", (c, t) -> {
+			if (t == 1) {
+				this.slotsBefore = slotIds(c);
+				onServer(c, player -> {
+					player.changeGameMode(GameMode.CREATIVE);
+					ServerWorld nether = player.getServer().getWorld(World.NETHER);
+					BlockPos pad = new BlockPos(0, 70, 0);
+					for (int dx = -1; dx <= 1; dx++) {
+						for (int dz = -1; dz <= 1; dz++) {
+							nether.setBlockState(pad.add(dx, -1, dz), Blocks.OBSIDIAN.getDefaultState());
+							for (int dy = 0; dy < 3; dy++) {
+								nether.setBlockState(pad.add(dx, dy, dz), Blocks.AIR.getDefaultState());
+							}
+						}
+					}
+					player.teleport(nether, 0.5, 70, 0.5, Set.of(), 0, 0);
+					return null;
+				});
+			}
+			SnapshotStore.Slot made = newSlot(c);
+			if (made != null) {
+				expectAuto(made, "Autosave (new dimension)", "minecraft:the_nether");
+				return true;
+			}
+			return false;
+		});
+		step("dimension change autosave (back home)", (c, t) -> {
+			if (t == 1) {
+				this.slotsBefore = slotIds(c);
+				onServer(c, player -> {
+					player.teleport(player.getServer().getOverworld(), this.groundPos.getX() + 0.5, this.groundPos.getY(),
+							this.groundPos.getZ() + 0.5, Set.of(), 0, 0);
+					return null;
+				});
+			}
+			SnapshotStore.Slot made = newSlot(c);
+			if (made != null) {
+				expectAuto(made, "Autosave (new dimension)", "minecraft:overworld");
+				long autos = countSlots(c, SlotType.AUTO);
+				if (autos != 3) {
+					throw new IllegalStateException("expected 3 rotating autosaves, found " + autos);
+				}
+				return true;
+			}
+			return false;
+		});
+		step("sleep autosave", (c, t) -> {
+			if (t == 1) {
+				onServer(c, player -> {
+					player.changeGameMode(GameMode.SURVIVAL);
+					player.getServer().setDifficulty(Difficulty.PEACEFUL, true);
+					ServerWorld world = player.getServerWorld();
+					world.setTimeOfDay(14000);
+					this.bedPos = this.groundPos.add(0, 0, -3);
+					world.setBlockState(this.bedPos, Blocks.RED_BED.getDefaultState()
+							.with(BedBlock.FACING, Direction.NORTH).with(BedBlock.PART, BedPart.FOOT));
+					world.setBlockState(this.bedPos.north(), Blocks.RED_BED.getDefaultState()
+							.with(BedBlock.FACING, Direction.NORTH).with(BedBlock.PART, BedPart.HEAD));
+					player.requestTeleport(this.bedPos.getX() + 0.5, this.bedPos.getY(), this.bedPos.getZ() + 1.5);
+					return null;
+				});
+			}
+			if (t == 40) {
+				this.slotsBefore = slotIds(c);
+				String failure = onServer(c, player -> player.trySleep(this.bedPos).left().map(Object::toString).orElse(null));
+				if (failure != null) {
+					throw new IllegalStateException("could not sleep: " + failure);
+				}
+			}
+			SnapshotStore.Slot made = t > 40 ? newSlot(c) : null;
+			if (made != null) {
+				expectAuto(made, "Autosave (slept)", "minecraft:overworld");
+				onServer(c, player -> {
+					player.getServer().setDifficulty(Difficulty.NORMAL, true);
+					player.requestTeleport(this.groundPos.getX() + 0.5, this.groundPos.getY(), this.groundPos.getZ() + 0.5);
+					return null;
+				});
+				return true;
+			}
+			return false;
+		});
 		step("pause menu Save button", (c, t) -> {
 			if (t == 1) {
 				c.setScreen(new GameMenuScreen(true));
@@ -270,6 +418,37 @@ public class SelfTestClient implements ClientModInitializer {
 				return true;
 			}
 			return false;
+		});
+
+		step("storage cap prunes autosaves, then old quicksaves", (c, t) -> {
+			if (t == 20) {
+				log("store size before pruning: " + (SnapshotStore.store(worldName(c)).totalBytes() >> 10) + " KB");
+				QuicksaveConfig.get().maxStorageMB = 1;
+				this.resultBefore = SaveRequests.lastResult();
+				pressKey(GLFW.GLFW_KEY_F6);
+			}
+			SaveService.Result result = SaveRequests.lastResult();
+			if (t > 20 && result != this.resultBefore && result != null) {
+				QuicksaveConfig.get().maxStorageMB = 4096;
+				if (!result.success()) {
+					throw new IllegalStateException("save failed: " + result);
+				}
+				log("pruned " + result.outcome().pruned() + ", store now "
+						+ (SnapshotStore.store(worldName(c)).totalBytes() >> 10) + " KB");
+				long autos = countSlots(c, SlotType.AUTO);
+				long quicks = countSlots(c, SlotType.QUICK);
+				long manuals = countSlots(c, SlotType.MANUAL);
+				if (autos != 0 || quicks != 1 || manuals != 1) {
+					throw new IllegalStateException("after pruning: " + autos + " auto, " + quicks + " quick, " + manuals
+							+ " manual; expected 0/1/1");
+				}
+				return true;
+			}
+			return false;
+		});
+		step("object store is consistent", (c, t) -> {
+			assertConsistent(c);
+			return true;
 		});
 
 		// --- Die, death cam, countdown loads by itself ---
@@ -402,21 +581,29 @@ public class SelfTestClient implements ClientModInitializer {
 		});
 
 		// --- Crash marker recovery ---
-		step("quit to title", (c, t) -> {
-			if (t < 20) {
-				return false;
+		step("Save and Quit to Title autosaves", (c, t) -> {
+			if (t == 20) {
+				this.slotsBefore = slotIds(c);
+				c.setScreen(new GameMenuScreen(true));
 			}
-			c.world.disconnect();
-			c.disconnect(new MessageScreen(Text.literal("selftest: quitting")));
-			c.setScreen(new TitleScreen());
-			return true;
+			if (t == 25) {
+				press(c.currentScreen.children(), "menu.returnToMenu");
+			}
+			if (t > 25 && c.currentScreen instanceof TitleScreen && c.world == null) {
+				List<SnapshotStore.Slot> made = SnapshotStore.list(WORLD).stream()
+						.filter(slot -> !this.slotsBefore.contains(slot.id())).toList();
+				if (made.size() != 1) {
+					throw new IllegalStateException("expected one quit autosave, got " + made);
+				}
+				expectAuto(made.get(0), "Autosave (quit)", "minecraft:overworld");
+				return true;
+			}
+			return false;
 		});
 		step("fake a crash mid-restore, roll back", (c, t) -> {
 			if (t == 20) {
 				Path worldDir = c.getLevelStorage().getSavesDirectory().resolve(WORLD);
-				Path preLoad = SnapshotStore.preLoadDir(WORLD);
-				deleteRecursively(preLoad);
-				copyTree(worldDir, preLoad.resolve("world"));
+				SnapshotStore.store(WORLD).capturePreLoad(worldDir);
 				Files.writeString(SnapshotStore.restoreMarker(WORLD), "world=" + WORLD + "\nslot=quick\n", StandardCharsets.UTF_8);
 				// A half-finished restore: junk in the world and level.dat gone.
 				Files.writeString(worldDir.resolve("junk.txt"), "half restored", StandardCharsets.UTF_8);
@@ -448,6 +635,13 @@ public class SelfTestClient implements ClientModInitializer {
 				return true;
 			}
 			return false;
+		});
+		step("object store is consistent at the end", (c, t) -> {
+			List<String> problems = SnapshotStore.store(WORLD).checkConsistency();
+			if (!problems.isEmpty()) {
+				throw new IllegalStateException(String.join("; ", problems));
+			}
+			return true;
 		});
 	}
 
@@ -563,8 +757,11 @@ public class SelfTestClient implements ClientModInitializer {
 			return f;
 		});
 		String world = worldName(c);
-		if (!Files.isRegularFile(SnapshotStore.preLoadDir(world).resolve("world").resolve("level.dat"))) {
-			failures.add("_pre_load/world/level.dat missing");
+		if (!Files.isRegularFile(SnapshotStore.preLoadDir(world).resolve("manifest.json"))) {
+			failures.add("_pre_load/manifest.json missing");
+		}
+		if (SnapshotStore.list(world).stream().anyMatch(slot -> "Autosave (quit)".equals(slot.meta().name()))) {
+			failures.add("closing the world for a load made an 'on quit' autosave");
 		}
 		if (Files.exists(SnapshotStore.restoreMarker(world))) {
 			failures.add("restore.inprogress marker left behind");
@@ -574,6 +771,36 @@ public class SelfTestClient implements ClientModInitializer {
 		}
 		if (!failures.isEmpty()) {
 			throw new IllegalStateException(String.join("; ", failures));
+		}
+	}
+
+	private static Set<String> slotIds(MinecraftClient c) {
+		return SnapshotStore.list(worldName(c)).stream().map(SnapshotStore.Slot::id).collect(Collectors.toSet());
+	}
+
+	/** The newest slot that wasn't there when {@link #slotsBefore} was taken, or null. */
+	private SnapshotStore.Slot newSlot(MinecraftClient c) {
+		return SnapshotStore.list(worldName(c)).stream()
+				.filter(slot -> !this.slotsBefore.contains(slot.id()))
+				.findFirst().orElse(null);
+	}
+
+	private static long countSlots(MinecraftClient c, SlotType type) {
+		return SnapshotStore.list(worldName(c)).stream().filter(slot -> slot.meta().type() == type).count();
+	}
+
+	private static void expectAuto(SnapshotStore.Slot slot, String name, String dimension) {
+		log("autosave " + slot.id() + ": " + slot.meta().name() + " in " + slot.meta().dimension());
+		if (slot.meta().type() != SlotType.AUTO || !name.equals(slot.meta().name())
+				|| !dimension.equals(slot.meta().dimension())) {
+			throw new IllegalStateException("expected autosave '" + name + "' in " + dimension + ", got " + slot.meta());
+		}
+	}
+
+	private static void assertConsistent(MinecraftClient c) throws Exception {
+		List<String> problems = SnapshotStore.store(worldName(c)).checkConsistency();
+		if (!problems.isEmpty()) {
+			throw new IllegalStateException(String.join("; ", problems));
 		}
 	}
 

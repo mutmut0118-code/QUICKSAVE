@@ -13,6 +13,7 @@
 		"client": ["com.muto118.quicksave.QuicksaveClient"]
 	},
 	"mixins": [
+		"quicksave.mixins.json",
 		{
 			"config": "quicksave.client.mixins.json",
 			"environment": "client"

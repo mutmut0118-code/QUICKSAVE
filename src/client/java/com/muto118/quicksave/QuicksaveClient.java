@@ -4,6 +4,7 @@ import com.muto118.quicksave.config.QuicksaveConfig;
 import com.muto118.quicksave.flow.RecoveryPrompt;
 import com.muto118.quicksave.flow.ReloadController;
 import com.muto118.quicksave.flow.SaveRequests;
+import com.muto118.quicksave.snapshot.SaveService;
 import com.muto118.quicksave.snapshot.SlotType;
 import com.muto118.quicksave.ui.PauseMenuButtons;
 import com.muto118.quicksave.ui.SaveToast;
@@ -50,6 +51,15 @@ public class QuicksaveClient implements ClientModInitializer {
 		});
 
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> SaveRequests.reset());
+
+		// Autosaves run on the integrated server by themselves; show a toast when one lands.
+		SaveService.addListener((type, result) -> {
+			if (type == SlotType.AUTO && result.success()) {
+				MinecraftClient client = MinecraftClient.getInstance();
+				client.execute(() -> SaveToast.show(client, Text.translatable("quicksave.toast.autosaved"),
+						Text.translatable("quicksave.toast.took", result.millis())));
+			}
+		});
 
 		ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
 			if (screen instanceof GameMenuScreen gameMenu) {
