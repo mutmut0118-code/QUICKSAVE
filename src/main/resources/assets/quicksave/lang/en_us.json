@@ -1,12 +1,55 @@
 {
-	"quicksave.command.inactive": "Quicksave only works in singleplayer worlds that are not open to LAN.",
-	"quicksave.command.save.done": "Quicksaved (%s ms).",
-	"quicksave.command.save.failed": "Quicksave failed: %s",
-	"quicksave.death.loading": "Your last save is waiting.",
+	"key.categories.quicksave": "Quicksave",
+	"key.quicksave.quicksave": "Quicksave",
+	"key.quicksave.quickload": "Quickload",
+
+	"quicksave.command.save.done": "Saved (%s ms).",
+	"quicksave.save.failed": "Save failed: %s",
+
+	"quicksave.refused.inactive": "Saving is disabled while the world is open to LAN",
+	"quicksave.refused.hardcore": "Quicksave is off in hardcore worlds",
+	"quicksave.refused.no_player": "Can't save right now",
+	"quicksave.refused.dead": "Can't save while dead",
+	"quicksave.refused.in_lava": "Can't save while in lava",
+	"quicksave.refused.falling": "Can't save while falling",
+	"quicksave.refused.combat": "Can't save during combat",
+	"quicksave.refused.busy": "Already saving or loading",
+
+	"quicksave.toast.quicksaving": "Quicksaving...",
+	"quicksave.toast.saving": "Saving...",
+	"quicksave.toast.quicksaved": "Quicksaved",
+	"quicksave.toast.saved": "Game saved",
+	"quicksave.toast.took": "Took %s ms",
+	"quicksave.toast.failed": "Save failed",
+	"quicksave.toast.nothing_to_load": "No save to load",
+
 	"quicksave.death.load": "Load Last Save",
 	"quicksave.death.quit": "Quit to Title",
+	"quicksave.death.countdown": "Loading last save in %s...",
+	"quicksave.death.waiting": "Your last save is waiting.",
+	"quicksave.death.loading": "Loading last save...",
+
+	"quicksave.menu.save": "Save",
+	"quicksave.menu.load": "Load",
+	"quicksave.save_name.title": "Save Game",
+	"quicksave.save_name.field": "Save name",
+	"quicksave.save_name.placeholder": "Name this save (optional)",
+	"quicksave.save_name.save": "Save",
+	"quicksave.confirm_load.title": "Load your last save?",
+	"quicksave.confirm_quickload.title": "Quickload?",
+	"quicksave.confirm_load.message": "Anything since that save will be lost.",
+
 	"quicksave.reload.closing": "Closing world...",
 	"quicksave.reload.restoring": "Loading last save...",
 	"quicksave.reload.failed.title": "Load failed",
-	"quicksave.reload.failed.message": "The save could not be restored: %s. Your world was left as it was before the load (see the log for details)."
+	"quicksave.reload.failed.message": "The save could not be restored: %s. Your world was left as it was before the load (see the log for details).",
+
+	"quicksave.recovery.title": "A load didn't finish",
+	"quicksave.recovery.message": "Quicksave was loading a save of \"%s\" when the game closed. Finish that load, or roll the world back to how it was right before it?",
+	"quicksave.recovery.finish": "Finish Load",
+	"quicksave.recovery.rollback": "Roll Back",
+	"quicksave.recovery.working": "Recovering world...",
+	"quicksave.recovery.finished": "Finished loading the save of \"%s\".",
+	"quicksave.recovery.rolled_back": "\"%s\" is back to how it was before the load.",
+	"quicksave.recovery.failed": "Recovery failed: %s. The backup is kept in .minecraft/quicksaves/<world>/_pre_load."
 }

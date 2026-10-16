@@ -2,7 +2,9 @@ package com.muto118.quicksave.flow;
 
 import com.muto118.quicksave.QuicksaveClient;
 import com.muto118.quicksave.QuicksaveMod;
+import com.muto118.quicksave.snapshot.SlotType;
 import com.muto118.quicksave.snapshot.SnapshotStore;
+import com.muto118.quicksave.ui.SaveToast;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.MessageScreen;
 import net.minecraft.client.gui.screen.NoticeScreen;
@@ -11,6 +13,9 @@ import net.minecraft.server.integrated.IntegratedServer;
 import net.minecraft.text.Text;
 
 import java.nio.file.Path;
+import java.util.EnumSet;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Close -> pre-load backup -> restore -> reopen.
@@ -42,11 +47,27 @@ public final class ReloadController {
 		return state;
 	}
 
-	/** Reloads the open world from M1's single slot. Must be called on the render thread. */
-	public static void loadLastSave(MinecraftClient client) {
-		load(client, SnapshotStore.M1_SLOT);
+	/** Any save type: what the death screen loads. */
+	public static final Set<SlotType> ANY = EnumSet.allOf(SlotType.class);
+	/** What quickload (F9) loads. */
+	public static final Set<SlotType> QUICK_OR_AUTO = EnumSet.of(SlotType.QUICK, SlotType.AUTO);
+
+	/**
+	 * Loads the newest save of the given types. Returns false (and shows a
+	 * toast) when there is none. Render thread.
+	 */
+	public static boolean loadLatest(MinecraftClient client, Set<SlotType> types) {
+		String worldName = QuicksaveClient.activeWorldFolderName(client);
+		Optional<SnapshotStore.Slot> slot = worldName == null ? Optional.empty() : SnapshotStore.latest(worldName, types);
+		if (slot.isEmpty()) {
+			SaveToast.show(client, Text.translatable("quicksave.toast.nothing_to_load"), null);
+			return false;
+		}
+		load(client, slot.get().id());
+		return true;
 	}
 
+	/** Must be called on the render thread. */
 	public static void load(MinecraftClient client, String slot) {
 		if (state != State.IDLE) {
 			QuicksaveMod.LOGGER.warn("Ignoring load request: reload already in progress ({})", state);
@@ -58,7 +79,7 @@ public final class ReloadController {
 			QuicksaveMod.LOGGER.warn("Ignoring load request: no active singleplayer world");
 			return;
 		}
-		if (!SnapshotStore.hasSave(worldName)) {
+		if (SnapshotStore.list(worldName).stream().noneMatch(s -> s.id().equals(slot))) {
 			QuicksaveMod.LOGGER.warn("Ignoring load request: '{}' has no save in slot '{}'", worldName, slot);
 			return;
 		}
@@ -69,6 +90,7 @@ public final class ReloadController {
 		//    MinecraftClient#disconnect blocks (rendering the screen) until the
 		//    integrated server thread has stopped and closed its session.
 		state = State.CLOSING;
+		SaveRequests.reset();
 		try {
 			if (client.world != null) {
 				client.world.disconnect();
