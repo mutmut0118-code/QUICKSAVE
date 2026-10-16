@@ -12,11 +12,11 @@ closes the world, restores your last save over it and reopens it, like Skyrim.
 
 ## Status
 
-**Current milestone: M1 done; PR open for the user's local test. Next: M2, only after the user confirms M1 works locally.**
+**Current milestone: M1 done and confirmed working by the user in a local game (2026-10-16). Next: M2.**
 
 | Milestone | State |
 | --- | --- |
-| M1 Proof of loop | Done. `/qs save`, death screen swap, close → pre-load backup → restore → reopen. `runSelfTest` passes headless (both phases: death → Load, and quit-while-dead → rejoin → Load). Awaiting the user's local test. |
+| M1 Proof of loop | Done. `/qs save`, death screen swap, close → pre-load backup → restore → reopen. `runSelfTest` passes headless (both phases: death → Load, and quit-while-dead → rejoin → Load). Confirmed working by the user locally. |
 | M2 Real UX | Not started |
 | M3 Content-addressed storage | Not started |
 | M4 Load menu + config screen | Not started |
