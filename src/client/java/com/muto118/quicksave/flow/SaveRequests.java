@@ -5,6 +5,7 @@ import com.muto118.quicksave.guard.SaveGuard;
 import com.muto118.quicksave.snapshot.SaveService;
 import com.muto118.quicksave.snapshot.SlotType;
 import com.muto118.quicksave.ui.SaveToast;
+import com.muto118.quicksave.ui.Thumbnails;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.server.integrated.IntegratedServer;
 import org.jetbrains.annotations.Nullable;
@@ -23,7 +24,19 @@ public final class SaveRequests {
 	/** Client ticks between showing the toast and starting the copy. */
 	private static final int TOAST_LEAD_TICKS = 4;
 
-	private record Pending(SlotType type, @Nullable String name, UUID player) {
+	private static final class Pending {
+		final SlotType type;
+		@Nullable
+		final String name;
+		final UUID player;
+		/** Filled in by {@link Thumbnails} at the next world frame, well before the save runs. */
+		volatile byte @Nullable [] thumbnail;
+
+		Pending(SlotType type, @Nullable String name, UUID player) {
+			this.type = type;
+			this.name = name;
+			this.player = player;
+		}
 	}
 
 	private static boolean busy;
@@ -69,8 +82,10 @@ public final class SaveRequests {
 					finish(client, type, new SaveService.Result(refusal, null, null, 0L));
 					return;
 				}
+				Pending request = new Pending(type, name, playerId);
+				Thumbnails.request(png -> request.thumbnail = png);
 				SaveToast.saving(client, type);
-				pending = new Pending(type, name, playerId);
+				pending = request;
 				delay = TOAST_LEAD_TICKS;
 			});
 		});
@@ -89,9 +104,9 @@ public final class SaveRequests {
 			return;
 		}
 		server.execute(() -> {
-			SaveService.Result result = SaveService.trySave(server, server.getPlayerManager().getPlayer(request.player()),
-					request.type(), request.name());
-			client.execute(() -> finish(client, request.type(), result));
+			SaveService.Result result = SaveService.trySave(server, server.getPlayerManager().getPlayer(request.player),
+					request.type, request.name, request.thumbnail);
+			client.execute(() -> finish(client, request.type, result));
 		});
 	}
 

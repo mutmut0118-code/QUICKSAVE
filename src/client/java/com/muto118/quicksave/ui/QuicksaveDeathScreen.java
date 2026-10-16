@@ -2,13 +2,17 @@ package com.muto118.quicksave.ui;
 
 import com.muto118.quicksave.config.QuicksaveConfig;
 import com.muto118.quicksave.flow.ReloadController;
+import com.mojang.blaze3d.platform.GlStateManager;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.MessageScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.resource.language.I18n;
 import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.Util;
 import net.minecraft.util.math.MathHelper;
 import org.jetbrains.annotations.Nullable;
@@ -22,11 +26,13 @@ import org.jetbrains.annotations.Nullable;
  * <li>"You Died!", the death message and "Loading last save in N...". At 0 the
  * last save loads. With {@code deathCountdownSeconds = 0} it waits for a click.</li>
  * </ol>
- * Buttons: Load Last Save, Quit to Title. No Respawn. ("Load..." arrives with
- * the load menu in M4.)
+ * Buttons: Load Last Save, Load... (the load menu; stops the countdown), Quit to
+ * Title. No Respawn.
  */
 public class QuicksaveDeathScreen extends Screen {
-	private static final Text TITLE = Text.translatable("deathScreen.title");
+	private static final Identifier VIGNETTE = Identifier.ofVanilla("textures/misc/vignette.png");
+	/** Pausing waits this long so the fall-over animation finishes first. */
+	private static final long PAUSE_AFTER_MS = 1000L;
 	private static final long FADE_MS = 400L;
 	/** Like vanilla: buttons stay locked this long so a click meant for the fight doesn't hit them. */
 	private static final long MIN_BUTTON_DELAY_MS = 1000L;
@@ -39,11 +45,14 @@ public class QuicksaveDeathScreen extends Screen {
 	private final float startYaw;
 	private long camSkippedAt = -1L;
 	private ButtonWidget loadButton;
+	private ButtonWidget loadMenuButton;
 	private ButtonWidget quitButton;
+	/** Set once the player opened the load menu: from then on, wait for a click. */
+	private boolean countdownCancelled;
 	private boolean actionTaken;
 
 	public QuicksaveDeathScreen(@Nullable Text message) {
-		super(TITLE);
+		super(title());
 		this.message = message;
 		QuicksaveConfig config = QuicksaveConfig.get();
 		this.camMs = Math.round(config.deathCamSeconds * 1000.0);
@@ -52,15 +61,32 @@ public class QuicksaveDeathScreen extends Screen {
 		this.startYaw = client.player != null ? client.player.getYaw() : 0.0F;
 	}
 
+	/**
+	 * Config {@code deathTitle} if set; else a resource pack's {@code quicksave.death.title};
+	 * else vanilla's "You Died!" (translated in every language).
+	 */
+	private static Text title() {
+		String custom = QuicksaveConfig.get().deathTitle;
+		if (custom != null && !custom.isBlank()) {
+			return Text.literal(custom);
+		}
+		return I18n.hasTranslation("quicksave.death.title") ? Text.translatable("quicksave.death.title")
+				: Text.translatable("deathScreen.title");
+	}
+
 	@Override
 	protected void init() {
 		this.loadButton = this.addDrawableChild(ButtonWidget.builder(Text.translatable("quicksave.death.load"),
 				button -> this.load()).dimensions(this.width / 2 - 100, this.height / 4 + 72, 200, 20).build());
+		this.loadMenuButton = this.addDrawableChild(ButtonWidget.builder(Text.translatable("quicksave.death.load_menu"), button -> {
+			this.countdownCancelled = true;
+			LoadMenuScreen.open(this.client, this, true);
+		}).dimensions(this.width / 2 - 100, this.height / 4 + 96, 200, 20).build());
 		this.quitButton = this.addDrawableChild(ButtonWidget.builder(Text.translatable("quicksave.death.quit"), button -> {
 			this.actionTaken = true;
 			this.updateButtons();
 			quitToTitle(this.client);
-		}).dimensions(this.width / 2 - 100, this.height / 4 + 96, 200, 20).build());
+		}).dimensions(this.width / 2 - 100, this.height / 4 + 120, 200, 20).build());
 		this.updateButtons();
 	}
 
@@ -101,7 +127,7 @@ public class QuicksaveDeathScreen extends Screen {
 
 	/** Remaining countdown in ms, or -1 when waiting for a click. */
 	private long remainingCountdown() {
-		if (this.countdownMs <= 0) {
+		if (this.countdownMs <= 0 || this.countdownCancelled) {
 			return -1L;
 		}
 		return Math.max(0L, this.uiAt() + this.countdownMs - this.elapsed());
@@ -120,8 +146,10 @@ public class QuicksaveDeathScreen extends Screen {
 		boolean visible = !this.inCamPhase();
 		boolean active = visible && !this.actionTaken && this.elapsed() >= MIN_BUTTON_DELAY_MS;
 		this.loadButton.visible = visible;
+		this.loadMenuButton.visible = visible;
 		this.quitButton.visible = visible;
 		this.loadButton.active = active;
+		this.loadMenuButton.active = active;
 		this.quitButton.active = active;
 	}
 
@@ -197,10 +225,31 @@ public class QuicksaveDeathScreen extends Screen {
 		if (this.inCamPhase()) {
 			return;
 		}
-		// Same red wash as the vanilla death screen, faded in after the death cam.
+		QuicksaveConfig config = QuicksaveConfig.get();
 		float a = this.uiAlpha();
-		context.fillGradient(0, 0, this.width, this.height,
-				((int) (0x60 * a) << 24) | 0x500000, ((int) (0xA0 * a) << 24) | 0x803030);
+		if (config.deathScreenTint) {
+			// Same red wash as the vanilla death screen, faded in after the death cam.
+			context.fillGradient(0, 0, this.width, this.height,
+					((int) (0x60 * a) << 24) | 0x500000, ((int) (0xA0 * a) << 24) | 0x803030);
+		}
+		if (config.deathScreenVignette) {
+			// Vanilla's vignette texture, drawn the way InGameHud does (darkens where the texture is bright).
+			RenderSystem.disableDepthTest();
+			RenderSystem.depthMask(false);
+			RenderSystem.enableBlend();
+			RenderSystem.blendFuncSeparate(GlStateManager.SrcFactor.ZERO, GlStateManager.DstFactor.ONE_MINUS_SRC_COLOR,
+					GlStateManager.SrcFactor.ONE, GlStateManager.DstFactor.ZERO);
+			context.setShaderColor(a, a, a, 1.0F);
+			// One pass only darkens the edges by about a third; three make a proper vignette.
+			for (int pass = 0; pass < 3; pass++) {
+				context.drawTexture(VIGNETTE, 0, 0, -90, 0.0F, 0.0F, this.width, this.height, this.width, this.height);
+			}
+			context.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+			RenderSystem.defaultBlendFunc();
+			RenderSystem.disableBlend();
+			RenderSystem.depthMask(true);
+			RenderSystem.enableDepthTest();
+		}
 	}
 
 	@Override
@@ -208,9 +257,13 @@ public class QuicksaveDeathScreen extends Screen {
 		return false;
 	}
 
-	/** Keep the world running so the death cam has something to look at. */
+	/**
+	 * The world keeps running during the death cam (and the first second, so the body
+	 * finishes falling over); after that it pauses like the pause menu if
+	 * {@code pauseOnDeathScreen}. The countdown keeps going: screens tick while paused.
+	 */
 	@Override
 	public boolean shouldPause() {
-		return false;
+		return QuicksaveConfig.get().pauseOnDeathScreen && !this.inCamPhase() && this.elapsed() >= PAUSE_AFTER_MS;
 	}
 }

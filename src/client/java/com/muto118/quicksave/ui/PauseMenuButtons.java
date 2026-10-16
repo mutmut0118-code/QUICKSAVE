@@ -1,11 +1,9 @@
 package com.muto118.quicksave.ui;
 
 import com.muto118.quicksave.QuicksaveClient;
-import com.muto118.quicksave.flow.ReloadController;
 import com.muto118.quicksave.snapshot.SnapshotStore;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.tooltip.Tooltip;
 import net.minecraft.client.gui.widget.ButtonWidget;
@@ -52,11 +50,7 @@ public final class PauseMenuButtons {
 						button -> client.setScreen(new SaveNameScreen(screen)))
 				.dimensions(exit.getX(), rowY, half, 20).build();
 		ButtonWidget load = ButtonWidget.builder(Text.translatable("quicksave.menu.load"),
-						button -> client.setScreen(new ConfirmScreen(confirmed -> {
-							if (!confirmed || !ReloadController.loadLatest(client, ReloadController.ANY)) {
-								client.setScreen(screen);
-							}
-						}, Text.translatable("quicksave.confirm_load.title"), Text.translatable("quicksave.confirm_load.message"))))
+						button -> LoadMenuScreen.open(client, screen, false))
 				.dimensions(exit.getX() + exit.getWidth() - half, rowY, half, 20).build();
 
 		save.active = active;
