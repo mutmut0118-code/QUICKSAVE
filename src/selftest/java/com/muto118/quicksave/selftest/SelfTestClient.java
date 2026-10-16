@@ -581,6 +581,9 @@ public class SelfTestClient implements ClientModInitializer {
 						this.sawCamPhase = true;
 					}
 				} else if (Util.getMeasuringTimeMs() - this.deathScreenSeenAt > 3500 && !this.countdownShot) {
+					if (!c.isPaused()) {
+						throw new IllegalStateException("game not paused behind the death screen (pauseOnDeathScreen)");
+					}
 					screenshot(c);
 					this.countdownShot = true;
 				}
@@ -661,6 +664,11 @@ public class SelfTestClient implements ClientModInitializer {
 			if (t < 20) {
 				return false;
 			}
+			// Death screen options: custom title, no red tint, vignette, no pause.
+			QuicksaveConfig.get().deathTitle = "Wasted";
+			QuicksaveConfig.get().deathScreenTint = false;
+			QuicksaveConfig.get().deathScreenVignette = true;
+			QuicksaveConfig.get().pauseOnDeathScreen = false;
 			onServer(c, player -> {
 				player.kill();
 				return null;
@@ -672,6 +680,18 @@ public class SelfTestClient implements ClientModInitializer {
 				if (screen.inCamPhase()) {
 					screen.mouseClicked(0, 0, 0); // a click skips the death cam
 				} else if (t > 30) {
+					if (!"Wasted".equals(screen.getTitle().getString())) {
+						throw new IllegalStateException("deathTitle not used: " + screen.getTitle().getString());
+					}
+					if (c.isPaused()) {
+						throw new IllegalStateException("paused although pauseOnDeathScreen is off");
+					}
+					screenshot(c);
+					QuicksaveConfig defaults = new QuicksaveConfig();
+					QuicksaveConfig.get().deathTitle = defaults.deathTitle;
+					QuicksaveConfig.get().deathScreenTint = defaults.deathScreenTint;
+					QuicksaveConfig.get().deathScreenVignette = defaults.deathScreenVignette;
+					QuicksaveConfig.get().pauseOnDeathScreen = defaults.pauseOnDeathScreen;
 					press(screen.children(), "quicksave.death.quit");
 					return true;
 				}

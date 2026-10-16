@@ -62,6 +62,15 @@ public final class ClothConfigScreen {
 		death.addEntry(e.startIntField(t("deathCountdownSeconds"), c.deathCountdownSeconds)
 				.setDefaultValue(d.deathCountdownSeconds).setMin(0).setMax(60).setTooltip(tip("deathCountdownSeconds"))
 				.setSaveConsumer(v -> c.deathCountdownSeconds = v).build());
+		death.addEntry(e.startBooleanToggle(t("pauseOnDeathScreen"), c.pauseOnDeathScreen)
+				.setDefaultValue(d.pauseOnDeathScreen).setTooltip(tip("pauseOnDeathScreen"))
+				.setSaveConsumer(v -> c.pauseOnDeathScreen = v).build());
+		death.addEntry(e.startBooleanToggle(t("deathScreenTint"), c.deathScreenTint)
+				.setDefaultValue(d.deathScreenTint).setSaveConsumer(v -> c.deathScreenTint = v).build());
+		death.addEntry(e.startBooleanToggle(t("deathScreenVignette"), c.deathScreenVignette)
+				.setDefaultValue(d.deathScreenVignette).setSaveConsumer(v -> c.deathScreenVignette = v).build());
+		death.addEntry(e.startStrField(t("deathTitle"), c.deathTitle).setDefaultValue(d.deathTitle)
+				.setTooltip(tip("deathTitle")).setSaveConsumer(v -> c.deathTitle = v).build());
 		death.addEntry(e.startBooleanToggle(t("confirmQuickload"), c.confirmQuickload)
 				.setDefaultValue(d.confirmQuickload).setSaveConsumer(v -> c.confirmQuickload = v).build());
 

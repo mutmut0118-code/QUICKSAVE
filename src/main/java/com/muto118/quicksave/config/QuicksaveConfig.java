@@ -33,6 +33,14 @@ public final class QuicksaveConfig {
 	/** "pullback", "orbit" or "fixed". */
 	public String deathCamStyle = "pullback";
 	public int deathCountdownSeconds = 3;
+	/** Pause the game (like the pause menu) once the "You Died!" screen is up. */
+	public boolean pauseOnDeathScreen = true;
+	/** Vanilla's red wash behind the death screen. */
+	public boolean deathScreenTint = true;
+	/** A dark vignette around the edges of the death screen. */
+	public boolean deathScreenVignette = false;
+	/** Death screen title. Empty = "You Died!" (or a resource pack's quicksave.death.title). */
+	public String deathTitle = "";
 	public boolean confirmQuickload = true;
 	public boolean allowSaveInCombat = false;
 	public int combatRadius = 16;
@@ -97,6 +105,9 @@ public final class QuicksaveConfig {
 		this.autosaveSlots = Math.max(1, this.autosaveSlots);
 		this.autosaveIntervalMinutes = Math.max(0, this.autosaveIntervalMinutes);
 		this.deathCamSeconds = Math.max(0.0, this.deathCamSeconds);
+		if (this.deathTitle == null) {
+			this.deathTitle = "";
+		}
 		if (this.deathCamStyle == null) {
 			this.deathCamStyle = "pullback";
 		}

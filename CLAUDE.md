@@ -12,7 +12,7 @@ closes the world, restores your last save over it and reopens it, like Skyrim.
 
 ## Status
 
-**Current milestone: M4 done; PR open for the user's local test. Next: M5, only after the user confirms M4 works locally.**
+**Current milestone: M4 + death screen options done; PR open for the user's local test. The user dropped M5 (2026-10-16): no reskin, resource packs cover the look. Nothing is planned next; wait for the user's feedback / bug reports. v2 (hot restore) stays a stretch idea only.**
 
 | Milestone | State |
 | --- | --- |
@@ -20,8 +20,17 @@ closes the world, restores your last save over it and reopens it, like Skyrim.
 | M2 Real UX | Done, confirmed working by the user locally (2026-10-16). |
 | M3 Content-addressed storage | Done, played by the user locally (2026-10-16). Their one bug report (sprint jumps counted as "falling") is fixed in M4. |
 | M4 Load menu + config screen | Done. 21 JUnit tests + `runSelfTest` 44/44 headless. Awaiting the user's local test. |
-| M5 Pack hardening + Skyrim reskin | Not started |
+| Death screen options (replaces M5) | Done. `pauseOnDeathScreen`, `deathScreenTint`, `deathScreenVignette`, `deathTitle`. Self-test 44/44. Awaiting the user's local test. |
+| M5 Pack hardening + Skyrim reskin | **Dropped by the user.** Resource packs can restyle text (every string is a translation key). |
 | v2 Hot restore | Not started |
+
+### Death screen options (after M4, instead of M5)
+
+- `pauseOnDeathScreen` (default true): `QuicksaveDeathScreen#shouldPause()` returns true once the death cam is over and at least 1 s has passed since death (so the fall-over animation finishes; it freezes when paused). `MinecraftClient` recomputes `paused` from `currentScreen.shouldPause()` every frame, and screens still `tick()` while paused (`MinecraftClient#tick` line ~1902), so the countdown and its auto-load keep working. The death cam pose uses wall time, so it still renders (orbit keeps turning).
+- `deathScreenTint` (default true): vanilla's red gradient.
+- `deathScreenVignette` (default false): vanilla `textures/misc/vignette.png` drawn like `InGameHud#renderVignetteOverlay` (blend ZERO / ONE_MINUS_SRC_COLOR), 3 passes, because one pass only darkens the edges by about a third. Faded in with the UI.
+- `deathTitle` (default ""): literal title. Empty → the translation key `quicksave.death.title` if a resource pack defines it (`I18n.hasTranslation`; not in our en_us on purpose), else vanilla `deathScreen.title` ("You Died!", translated in every language).
+- All other text is under `quicksave.*` translation keys in `assets/quicksave/lang/en_us.json`, so a resource pack can reword anything.
 
 ### M4: load menu, thumbnails, config screen, falling fix
 
@@ -169,7 +178,9 @@ bigger world.
   (regression for the user's bug), thumbnails on quick/manual/auto saves, pause menu → load
   menu (entry count), Rename, Delete (+ consistency), loading a chosen save from the menu,
   death screen Load... → Back stops the countdown → Load... → load, the load-menu key is unbound
-  by default, and the Cloth Config screen opens through Mod Menu. 44 steps.
+  by default, and the Cloth Config screen opens through Mod Menu. Death screen options: the
+  game is paused behind the default death screen; with `deathTitle` "Wasted", tint off,
+  vignette on and pause off, the title is used and the game isn't paused (screenshot). 44 steps.
   Hooks: `AutosaveScheduler.testIntervalTicks`.
 - `./gradlew test` (part of `build`): JUnit 5 tests for `Xxh64` and `WorldStore` in
   `src/test` (round trip, real copies not links, incremental skip, racy rewrite, mtime kept
@@ -271,6 +282,10 @@ when a slot rotates out. `maxStorageMB` cap prunes the oldest autosaves first.
 | `deathCamSeconds` | 2 | 0 disables the death cam |
 | `deathCamStyle` | `"pullback"` | `"pullback"`, `"orbit"`, `"fixed"` |
 | `deathCountdownSeconds` | 3 | 0 waits for a click |
+| `pauseOnDeathScreen` | true | pause the world once the death screen UI is up |
+| `deathScreenTint` | true | red background on the death screen |
+| `deathScreenVignette` | false | dark vignette on the death screen |
+| `deathTitle` | `""` | custom death screen title (empty = default / resource pack) |
 | `confirmQuickload` | true | prompt before F9 |
 | `allowSaveInCombat` | false | false: refuse saves in combat ("Can't save during combat" toast) |
 | `combatRadius` | 16 | a hostile mob targeting you within this many blocks = combat |
@@ -334,10 +349,10 @@ when a slot rotates out. `maxStorageMB` cap prunes the oldest autosaves first.
 - **M2 Real UX.** F6/F9, countdown death screen, death cam, toasts, pause-menu buttons, combat/situation save blocking, crash marker recovery, config file.
 - **M3** Content-addressed storage, rotating slots, autosaves, pruning.
 - **M4** Load menu with thumbnails, rename/delete, Mod Menu + Cloth Config screen.
-- **M5** Pack hardening and a reskin to a Skyrim-style look (dark vignette, serif type, parchment panel).
+- ~~**M5** Pack hardening and a reskin to a Skyrim-style look.~~ Dropped by the user; replaced by the death screen options above.
 - **v2 stretch** In-place hot restore with no load screen.
 
-Work one milestone per session and stop for the user to test locally before starting the next.
+Work one milestone (or requested change) at a time and stop for the user to test locally before the next.
 
 ## Conventions
 
