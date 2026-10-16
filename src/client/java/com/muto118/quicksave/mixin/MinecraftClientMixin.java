@@ -1,6 +1,7 @@
 package com.muto118.quicksave.mixin;
 
 import com.muto118.quicksave.QuicksaveClient;
+import com.muto118.quicksave.config.QuicksaveConfig;
 import com.muto118.quicksave.snapshot.SnapshotStore;
 import com.muto118.quicksave.ui.QuicksaveDeathScreen;
 import net.minecraft.client.MinecraftClient;
@@ -37,8 +38,7 @@ public abstract class MinecraftClientMixin {
 		if (!vanillaDeath) {
 			return screen;
 		}
-		// Hardcore keeps vanilla behaviour until allowInHardcore exists (M2 config).
-		if (this.world != null && this.world.getLevelProperties().isHardcore()) {
+		if (this.world != null && this.world.getLevelProperties().isHardcore() && !QuicksaveConfig.get().allowInHardcore) {
 			return screen;
 		}
 		String worldName = QuicksaveClient.activeWorldFolderName((MinecraftClient) (Object) this);

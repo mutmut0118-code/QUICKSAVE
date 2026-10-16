@@ -1,9 +1,11 @@
 package com.muto118.quicksave;
 
 import com.mojang.brigadier.Command;
-import com.mojang.brigadier.context.CommandContext;
-import com.muto118.quicksave.snapshot.SnapshotStore;
-import com.muto118.quicksave.snapshot.WorldFlusher;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.muto118.quicksave.config.QuicksaveConfig;
+import com.muto118.quicksave.guard.SaveGuard;
+import com.muto118.quicksave.snapshot.SaveService;
+import com.muto118.quicksave.snapshot.SlotType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
@@ -14,6 +16,7 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.WorldSavePath;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +28,9 @@ public class QuicksaveMod implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		QuicksaveConfig.load();
+		SaveGuard.register();
+
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			if (server.isDedicated()) {
 				LOGGER.info("Quicksave is singleplayer-only and is inactive on this dedicated server");
@@ -43,8 +49,14 @@ public class QuicksaveMod implements ModInitializer {
 			if (!environment.integrated) {
 				return;
 			}
+			// /qs save          -> quicksave slot (same as F6)
+			// /qs save <name>   -> named manual save
 			dispatcher.register(CommandManager.literal("qs")
-					.then(CommandManager.literal("save").executes(QuicksaveMod::runSave)));
+					.then(CommandManager.literal("save")
+							.executes(ctx -> runSave(ctx.getSource(), SlotType.QUICK, null))
+							.then(CommandManager.argument("name", StringArgumentType.greedyString())
+									.executes(ctx -> runSave(ctx.getSource(), SlotType.MANUAL,
+											StringArgumentType.getString(ctx, "name"))))));
 		});
 	}
 
@@ -63,26 +75,17 @@ public class QuicksaveMod implements ModInitializer {
 		return !server.isDedicated() && !server.isRemote();
 	}
 
-	private static int runSave(CommandContext<ServerCommandSource> ctx) {
-		ServerCommandSource source = ctx.getSource();
-		MinecraftServer server = source.getServer();
-		if (!isActive(server)) {
-			source.sendError(Text.translatable("quicksave.command.inactive"));
+	private static int runSave(ServerCommandSource source, SlotType type, @Nullable String name) {
+		SaveService.Result result = SaveService.trySave(source.getServer(), source.getPlayer(), type, name);
+		if (result.refusal() != null) {
+			source.sendError(Text.translatable("quicksave.refused." + result.refusal().key));
 			return 0;
 		}
-		String worldName = worldFolderName(server);
-		Path worldDir = worldDir(server);
-		long start = System.nanoTime();
-		try {
-			WorldFlusher.runFlushed(server, () -> SnapshotStore.save(worldDir, worldName, SnapshotStore.M1_SLOT));
-		} catch (Exception e) {
-			LOGGER.error("Quicksave of '{}' failed", worldName, e);
-			source.sendError(Text.translatable("quicksave.command.save.failed", String.valueOf(e.getMessage())));
+		if (result.error() != null) {
+			source.sendError(Text.translatable("quicksave.save.failed", String.valueOf(result.error().getMessage())));
 			return 0;
 		}
-		long ms = (System.nanoTime() - start) / 1_000_000L;
-		LOGGER.info("Saved '{}' to slot '{}' in {} ms", worldName, SnapshotStore.M1_SLOT, ms);
-		source.sendFeedback(() -> Text.translatable("quicksave.command.save.done", ms), false);
+		source.sendFeedback(() -> Text.translatable("quicksave.command.save.done", result.millis()), false);
 		return Command.SINGLE_SUCCESS;
 	}
 }

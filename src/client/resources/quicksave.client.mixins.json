@@ -3,7 +3,12 @@
 	"package": "com.muto118.quicksave.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
+		"CameraMixin",
+		"ClientPlayerEntityMixin",
 		"DeathScreenAccessor",
+		"GameRendererMixin",
+		"InGameHudMixin",
+		"LivingEntityMixin",
 		"MinecraftClientMixin"
 	],
 	"injectors": {
