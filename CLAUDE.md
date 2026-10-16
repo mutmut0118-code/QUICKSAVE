@@ -73,7 +73,14 @@ saves stop. But these still write while savingDisabled is set:
 server thread inside `WorldFlusher.runFlushed` (a hitch proportional to world size). M3
 keeps the copy on the server thread but makes it cheap (only changed files are hashed/
 copied). Moving it off-thread would need mixins gating the POI tick, entity unloads and the
-autosave; revisit only if hitches are a problem. Not yet measured in game: actual hitch size.
+autosave; revisit only if hitches are a problem.
+
+**Measured in the user's local game (M1, new world):** `/qs save` took 200–300 ms. The user
+saw a brief, abrupt camera freeze during the save; the world otherwise looked fine. Load
+time felt "normal" (like opening the world from the menu). For M2: show the
+"Quicksaving..." toast on the frame *before* the copy starts (render first, then
+`server.execute` the save) so the hitch reads as intentional. M3's incremental copy is the
+real fix and should cut it to tens of ms. Re-measure after M3 on a bigger world.
 
 ### Build environment notes
 
