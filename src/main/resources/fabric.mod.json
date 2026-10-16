@@ -10,7 +10,8 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": ["com.muto118.quicksave.QuicksaveMod"],
-		"client": ["com.muto118.quicksave.QuicksaveClient"]
+		"client": ["com.muto118.quicksave.QuicksaveClient"],
+		"modmenu": ["com.muto118.quicksave.compat.ModMenuIntegration"]
 	},
 	"mixins": [
 		"quicksave.mixins.json",
@@ -24,5 +25,9 @@
 		"minecraft": "~1.21.1",
 		"java": ">=21",
 		"fabric-api": "*"
+	},
+	"suggests": {
+		"modmenu": "*",
+		"cloth-config": "*"
 	}
 }

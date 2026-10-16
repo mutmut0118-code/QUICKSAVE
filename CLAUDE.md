@@ -5,23 +5,33 @@ closes the world, restores your last save over it and reopens it, like Skyrim.
 
 - Mod id `quicksave`, package `com.muto118.quicksave`, Java 21.
 - Fabric Loom + **Yarn** mappings. Fabric API is the only hard dependency. Mod Menu +
-  Cloth Config come later (M4) as optional dependencies.
+  Cloth Config are optional (config screen), compile-only, never bundled.
 - One jar, split `main` (common/server) and `client` source sets.
 - This file is the source of truth for the design and for progress. Keep **Status** current.
   (`Quicksave Mod — Design Doc (Fabric 1.21.1).md` is the original upload; CLAUDE.md supersedes it.)
 
 ## Status
 
-**Current milestone: M3 done; PR open for the user's local test. Next: M4, only after the user confirms M3 works locally.**
+**Current milestone: M4 done; PR open for the user's local test. Next: M5, only after the user confirms M4 works locally.**
 
 | Milestone | State |
 | --- | --- |
 | M1 Proof of loop | Done, confirmed working by the user locally (2026-10-16). |
 | M2 Real UX | Done, confirmed working by the user locally (2026-10-16). |
-| M3 Content-addressed storage | Done. 18 JUnit tests + `runSelfTest` 34/34 headless. Awaiting the user's local test. |
-| M4 Load menu + config screen | Not started |
+| M3 Content-addressed storage | Done, played by the user locally (2026-10-16). Their one bug report (sprint jumps counted as "falling") is fixed in M4. |
+| M4 Load menu + config screen | Done. 21 JUnit tests + `runSelfTest` 44/44 headless. Awaiting the user's local test. |
 | M5 Pack hardening + Skyrim reskin | Not started |
 | v2 Hot restore | Not started |
+
+### M4: load menu, thumbnails, config screen, falling fix
+
+- **Falling rule (user bug: sprint jumps were refused as "falling").** Now "falling" = a fall that would hurt: `fallDistance` + the drop to the first collision surface below (scanned up to 64 blocks; void/none = deadly) > the `GENERIC_SAFE_FALL_DISTANCE` attribute (3). Landing in water, slow falling, flying, gliding, climbing, riding, swimming = not falling. A time-based grace period was rejected on purpose: a save early in a long fall loads you mid-air into the same death, and death loads that save again (a loop).
+- `ui.LoadMenuScreen`: `AlwaysSelectedEntryListWidget` of every slot, newest first: 96x54 thumbnail (or a dark box with the dimension), name + type, "Day N, HH:MM" (dayTime 0 = 06:00 day 1) · dimension · x, y, z, real date · ♥ health. Header: "N saves · X MB on disk" (`WorldStore.totalBytes`, computed on the IO worker). Buttons Load / Rename / Delete / Back; double-click loads. Load asks for confirmation except from the death screen. Delete confirms, then deletes + GCs on the IO worker. Textures are registered per entry and destroyed in `removed()`. Name the entry class something other than `Entry` (it clashes with the inherited `AlwaysSelectedEntryListWidget.Entry`).
+- Opened from: pause menu **Load** (replaces M2's confirm-and-load-newest), the death screen's **Load...** button (sets `countdownCancelled`, so the countdown can't fire behind or after the menu), and the **Open Load Menu** key (unbound by default).
+- `ui.SaveNameScreen` is now a generic name prompt (pause-menu Save and Rename).
+- Thumbnails (`ui.Thumbnails`, `saves/<slot>/thumb.png`, 256x144 PNG, centre-cropped to 16:9): requested, then captured at the next frame in `GameRendererMixin` at the `updateWorldIcon()` call in `GameRenderer#render`, i.e. right after the world is drawn and before HUD, chat, toasts and screens (the world still renders under paused menus). F6/manual saves pass the PNG into the save (`SaveService.trySave(..., thumbnail)` → written into the slot's tmp dir). Autosaves get theirs after the fact (`WorldStore.writeThumbnail`, no-op if the slot rotated out). The last capture is cached 5 min and written immediately for autosaves, because the quit autosave lands while the world is closing and no frame will come; opening the pause menu requests a capture to keep that cache fresh.
+- `WorldStore.rename`, `delete` (now GCs), `thumbnail`, `writeThumbnail`. `SaveOutcome` carries the world name.
+- Config screen: `compat.ModMenuIntegration` (`modmenu` entrypoint) → `compat.ClothConfigScreen` (categories Slots & Storage, Autosaves, Death & Loading, Saving Rules; `blockSaveWhen` shown as two toggles; saves via `QuicksaveConfig.save()`, values apply immediately). Without Cloth Config the factory returns null and Mod Menu shows no config button. Both are `modCompileOnly` + `modLocalRuntime` (in dev runs, not bundled) and listed under `suggests`. Repos: maven.terraformersmc.com (Mod Menu 11.0.3), maven.shedaniel.me (Cloth Config 15.0.140).
 
 ### M3: storage, rotation, autosaves
 
@@ -58,18 +68,18 @@ Autosaves (`flow.AutosaveScheduler`, main source set, server thread):
 - Refused for combat/falling/lava/no player: retried every 2 s. Labels: "Start", "Autosave", "Autosave (new dimension)", "Autosave (slept)", "Autosave (quit)".
 - `SaveService.addListener`: the client toasts "Autosaved"; the scheduler resets its timer.
 
-Not in M3: thumbnails (`thumb.png`, needs the render thread; comes with the M4 load menu), load menu, delete/rename UI, config screen.
+(M3 shipped without thumbnails or a load menu; both arrived in M4.)
 
 ### M2 summary (still current)
 
 - `config/quicksave.json` (`config.QuicksaveConfig`, Gson, every key from the design; rewritten on load so new keys appear).
 - Keys under Controls › Quicksave: Quicksave F6, Quickload F9 (`confirmQuickload` → ConfirmScreen). F9 loads the newest QUICK/AUTO slot.
 - `flow.SaveRequests`: guard check on the server → "Quicksaving..." toast → 4 client ticks so the toast is on screen → save on the server thread → result toast. `/qs save` uses the same `snapshot.SaveService`; `/qs save <name>` makes a manual save.
-- `guard.SaveGuard`: refuses when LAN-open, hardcore (unless `allowInHardcore`), dead, in lava, falling, or in combat (mob within `combatRadius` targeting the player, or `combatCooldownSeconds` after taking/dealing damage via Fabric `AFTER_DAMAGE`). "falling" = not on ground, `fallDistance > 1`, not flying/gliding/swimming/climbing/riding. Server-side player velocity is NOT updated from movement packets, so it can't be used.
+- `guard.SaveGuard`: refuses when LAN-open, hardcore (unless `allowInHardcore`), dead, in lava, falling (see M4 for the current rule), or in combat (mob within `combatRadius` targeting the player, or `combatCooldownSeconds` after taking/dealing damage via Fabric `AFTER_DAMAGE`). Server-side player velocity is NOT updated from movement packets, so it can't be used.
 - `ui.SaveToast`: one `SystemToast.Type`, so "Quicksaving..." is replaced in place by the result. M5 reskins it.
-- Death screen: death cam phase (UI hidden; click/key skips it), then fade-in, "Loading last save in N..." auto-loads the newest save of any type at 0 (`deathCountdownSeconds = 0` waits for a click). `shouldPause()` is false so the world keeps running. The "Load..." button waits for the M4 load menu.
+- Death screen: death cam phase (UI hidden; click/key skips it), then fade-in, "Loading last save in N..." auto-loads the newest save of any type at 0 (`deathCountdownSeconds = 0` waits for a click). `shouldPause()` is false so the world keeps running. Buttons Load Last Save / Load... (M4) / Quit to Title.
 - Death cam (`ui.DeathCam` + `CameraMixin` at `Camera#update` TAIL): pullback / orbit / fixed. While it is active: `GameRendererMixin` cancels `renderHand`, `InGameHudMixin` cancels `renderCrosshair` (both are gated on the perspective *option*, not the camera), `ClientPlayerEntityMixin` stops `ClientPlayerEntity#updatePostDeath` removing your own body at deathTime 20, and `LivingEntityMixin` cancels the "poof" (`addDeathParticles`) for the local player.
-- Pause menu: Save (→ `ui.SaveNameScreen`, named manual save) and Load (confirm → newest save) above "Save and Quit to Title", via Fabric `ScreenEvents.AFTER_INIT` + `Screens.getButtons` in `ui.PauseMenuButtons` (not a GameMenuScreen mixin). Inactive with a tooltip while LAN-open; Load inactive with no save.
+- Pause menu: Save (→ `ui.SaveNameScreen`, named manual save) and Load (→ load menu since M4) above "Save and Quit to Title", via Fabric `ScreenEvents.AFTER_INIT` + `Screens.getButtons` in `ui.PauseMenuButtons` (not a GameMenuScreen mixin). Inactive with a tooltip while LAN-open; Load inactive with no save.
 - Crash recovery (`flow.RecoveryPrompt`): on the first title screen after launch, any `_pre_load/restore.inprogress` → ConfirmScreen Finish Load / Roll Back → NoticeScreen. A world whose recovery fails isn't asked about again until restart.
 
 ### Verified facts (checked against decompiled 1.21.1 / Yarn 1.21.1+build.3)
@@ -96,6 +106,10 @@ Names (all confirmed to exist with these signatures):
 | `Camera#update(BlockView, Entity, boolean thirdPerson, boolean inverseView, float tickDelta)` | private `thirdPerson`, protected `setRotation(float, float)`, `setPos(double, double, double)`, `moveBy(float, float, float)`, private `clipToSpace(float)` (raycasts from the current pos along `horizontalPlane`, so set pos + rotation first). |
 | `GameRenderer#renderHand(Camera, float, Matrix4f)`, `InGameHud#renderCrosshair(DrawContext, RenderTickCounter)` | private; both decide from `options.getPerspective()`. |
 | `ClientPlayerEntity#updatePostDeath` | calls `this.remove(KILLED)` when `deathTime == 20` (client-side body removal). `LivingEntity#addDeathParticles` is private, called from `handleStatus(60)`. |
+| `GameRenderer#render(RenderTickCounter, boolean)` | world → `updateWorldIcon()` (vanilla's world-list icon capture) → post-processing → HUD (`inGameHud.render`) → overlay/screen. Our thumbnail hook is at the `updateWorldIcon` INVOKE. |
+| `ScreenshotRecorder.takeScreenshot(Framebuffer)`, `NativeImage(int, int, boolean)`, `#resizeSubRectTo(x, y, w, h, target)` (same format only), `#getBytes()` (PNG), `NativeImage.read(InputStream)`, `NativeImageBackedTexture(NativeImage)`, `TextureManager#registerTexture/destroyTexture`, `DrawContext#drawTexture(Identifier, x, y, u, v, w, h, texW, texH)`, `Identifier.of(ns, path)` | thumbnails + load menu. |
+| `AlwaysSelectedEntryListWidget(MinecraftClient, width, height, y, itemHeight)` | entries implement `render(DrawContext, index, y, x, entryWidth, entryHeight, mouseX, mouseY, hovered, tickDelta)` and `getNarration()`. |
+| `EntityAttributes.GENERIC_SAFE_FALL_DISTANCE`, `StatusEffects.SLOW_FALLING` | `RegistryEntry`s; `LivingEntity#getAttributeValue`, `#hasStatusEffect`. |
 | `GameMenuScreen` | exit button text `menu.returnToMenu` (singleplayer), width 204, grid at 25% height. `GameMenuScreen(false)` (F3+Esc) has no buttons. |
 | `SystemToast.Type(long)`, `SystemToast.show(ToastManager, Type, Text, Text)` | `show` replaces an existing toast of the same type. |
 | `ServerLivingEntityEvents.AFTER_DAMAGE` | `(entity, source, baseDamageTaken, damageTaken, blocked)`. |
@@ -151,12 +165,17 @@ bigger world.
   autosave rotation, pause-menu buttons + named manual save, `maxStorageMB` pruning order,
   store consistency, death cam (UI hidden, screenshots) + countdown auto-load timing, rewind
   checks, F9 + confirm, quit-while-dead → rejoin → Load, loads never autosave on quit, Save
-  and Quit autosave, faked crash marker → Roll Back. Hooks: `AutosaveScheduler.testIntervalTicks`.
+  and Quit autosave, faked crash marker → Roll Back. M4 adds: sprint jump is not "falling"
+  (regression for the user's bug), thumbnails on quick/manual/auto saves, pause menu → load
+  menu (entry count), Rename, Delete (+ consistency), loading a chosen save from the menu,
+  death screen Load... → Back stops the countdown → Load... → load, the load-menu key is unbound
+  by default, and the Cloth Config screen opens through Mod Menu. 44 steps.
+  Hooks: `AutosaveScheduler.testIntervalTicks`.
 - `./gradlew test` (part of `build`): JUnit 5 tests for `Xxh64` and `WorldStore` in
   `src/test` (round trip, real copies not links, incremental skip, racy rewrite, mtime kept
   on restore, rotation + GC, pre-load GC, prune order, legacy conversion and rollback,
   corrupt object leaves the world untouched, unfinished-restore refusal, finish-interrupted,
-  path escape, incomplete slots). `WorldStore` takes its directory in the constructor so it
+  path escape, incomplete slots, rename, thumbnails, delete + GC). 21 tests. `WorldStore` takes its directory in the constructor so it
   needs no Fabric runtime.
 
 ## Design
@@ -296,14 +315,17 @@ when a slot rotates out. `maxStorageMB` cap prunes the oldest autosaves first.
 | `mixin.server.ServerPlayNetworkHandlerMixin` | main | quit autosave hook (`quicksave.mixins.json`) |
 | `ui.QuicksaveDeathScreen` | client | death cam phase + countdown death screen |
 | `ui.DeathCam` | client | death cam pose (pullback / orbit / fixed) |
-| `ui.SaveNameScreen` | client | name dialog for pause-menu Save |
+| `ui.SaveNameScreen` | client | name prompt (pause-menu Save, load-menu Rename) |
 | `ui.PauseMenuButtons` | client | Save/Load on the pause menu (Fabric ScreenEvents; replaces the planned GameMenuScreenMixin) |
-| `ui.LoadMenuScreen` | client | thumbnail save list (M4) |
+| `ui.LoadMenuScreen` | client | load menu: thumbnails, details, Load / Rename / Delete |
+| `ui.Thumbnails` | client | clean 256x144 world captures for save thumbnails |
+| `compat.ModMenuIntegration`, `compat.ClothConfigScreen` | client | optional config screen |
 | `ui.SaveToast` | client | "Quicksaving…" / "Can't save during combat" toasts |
 | `mixin.MinecraftClientMixin` | client | swaps DeathScreen in setScreen |
 | `mixin.DeathScreenAccessor` | client | reads the vanilla death message |
 | `mixin.CameraMixin` | client | applies the death cam pose |
-| `mixin.GameRendererMixin`, `mixin.InGameHudMixin` | client | hide hand / crosshair during the death cam |
+| `mixin.GameRendererMixin` | client | thumbnail capture point; hides the hand during the death cam |
+| `mixin.InGameHudMixin` | client | hides the crosshair during the death cam |
 | `mixin.ClientPlayerEntityMixin`, `mixin.LivingEntityMixin` | client | keep your body (no removal, no poof) during the death cam |
 
 ## Milestones

@@ -69,6 +69,17 @@ public final class QuicksaveConfig {
 		}
 	}
 
+	/** Writes the current values to config/quicksave.json (used by the config screen). */
+	public static void save() {
+		Path path = path();
+		try {
+			Files.createDirectories(path.getParent());
+			Files.writeString(path, GSON.toJson(instance.sanitized()), StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			QuicksaveMod.LOGGER.warn("Could not write {}", path, e);
+		}
+	}
+
 	public boolean blocks(String situation) {
 		return this.blockSaveWhen.contains(situation);
 	}

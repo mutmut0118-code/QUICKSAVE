@@ -37,7 +37,7 @@ public final class SnapshotStore {
 	}
 
 	/** What one save did. */
-	public record SaveOutcome(String slot, WorldStore.SaveStats stats, List<String> rotatedOut, List<String> pruned,
+	public record SaveOutcome(String world, String slot, WorldStore.SaveStats stats, List<String> rotatedOut, List<String> pruned,
 			long freedBytes) {
 	}
 
@@ -94,11 +94,12 @@ public final class SnapshotStore {
 	 * Saves the (already flushed, not changing) world into a new slot. Call
 	 * {@link #afterSave} once the world may change again.
 	 */
-	public static SaveOutcome save(Path worldDir, String worldFolderName, SaveMeta meta) throws IOException {
+	public static SaveOutcome save(Path worldDir, String worldFolderName, SaveMeta meta, byte @Nullable [] thumbnail)
+			throws IOException {
 		WorldStore store = store(worldFolderName);
 		String slot = newSlotId(store, meta.type());
-		WorldStore.SaveStats stats = store.save(worldDir, slot, meta);
-		return new SaveOutcome(slot, stats, List.of(), List.of(), 0L);
+		WorldStore.SaveStats stats = store.save(worldDir, slot, meta, thumbnail);
+		return new SaveOutcome(worldFolderName, slot, stats, List.of(), List.of(), 0L);
 	}
 
 	/** Rotation, garbage collection and the storage cap. Doesn't touch the world folder. */
@@ -114,7 +115,7 @@ public final class SnapshotStore {
 		List<String> pruned = config.maxStorageMB > 0
 				? store.prune((long) config.maxStorageMB << 20, saved.slot())
 				: List.of();
-		return new SaveOutcome(saved.slot(), saved.stats(), rotated, pruned, freed);
+		return new SaveOutcome(saved.world(), saved.slot(), saved.stats(), rotated, pruned, freed);
 	}
 
 	/** Restores a slot over the world folder (world closed). See {@link WorldStore#restore}. */

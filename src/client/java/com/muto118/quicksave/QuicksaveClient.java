@@ -6,7 +6,10 @@ import com.muto118.quicksave.flow.ReloadController;
 import com.muto118.quicksave.flow.SaveRequests;
 import com.muto118.quicksave.snapshot.SaveService;
 import com.muto118.quicksave.snapshot.SlotType;
+import com.muto118.quicksave.snapshot.SnapshotStore;
+import com.muto118.quicksave.ui.LoadMenuScreen;
 import com.muto118.quicksave.ui.PauseMenuButtons;
+import com.muto118.quicksave.ui.Thumbnails;
 import com.muto118.quicksave.ui.SaveToast;
 import com.muto118.quicksave.guard.SaveGuard;
 import net.fabricmc.api.ClientModInitializer;
@@ -33,12 +36,15 @@ public class QuicksaveClient implements ClientModInitializer {
 			GLFW.GLFW_KEY_F6, KEY_CATEGORY);
 	public static final KeyBinding QUICKLOAD_KEY = new KeyBinding("key.quicksave.quickload", InputUtil.Type.KEYSYM,
 			GLFW.GLFW_KEY_F9, KEY_CATEGORY);
+	/** Unbound by default. */
+	public static final KeyBinding LOAD_MENU_KEY = new KeyBinding("key.quicksave.load_menu", InputUtil.Type.KEYSYM,
+			GLFW.GLFW_KEY_UNKNOWN, KEY_CATEGORY);
 
 	@Override
 	public void onInitializeClient() {
 		KeyBindingHelper.registerKeyBinding(QUICKSAVE_KEY);
 		KeyBindingHelper.registerKeyBinding(QUICKLOAD_KEY);
-		// The "open load menu" key (unbound by default) arrives with the load menu in M4.
+		KeyBindingHelper.registerKeyBinding(LOAD_MENU_KEY);
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			while (QUICKSAVE_KEY.wasPressed()) {
@@ -47,20 +53,47 @@ public class QuicksaveClient implements ClientModInitializer {
 			while (QUICKLOAD_KEY.wasPressed()) {
 				onQuickloadKey(client);
 			}
+			while (LOAD_MENU_KEY.wasPressed()) {
+				if (client.player != null && client.currentScreen == null) {
+					LoadMenuScreen.open(client, null, false);
+				}
+			}
 			SaveRequests.tick(client);
 		});
 
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> SaveRequests.reset());
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+			SaveRequests.reset();
+			Thumbnails.reset();
+		});
 
-		// Autosaves run on the integrated server by themselves; show a toast when one lands.
+		// Autosaves run on the integrated server by themselves: toast, and give the slot a thumbnail.
 		SaveService.addListener((type, result) -> {
-			if (type == SlotType.AUTO && result.success()) {
+			if (type == SlotType.AUTO && result.success() && result.outcome() != null) {
 				MinecraftClient client = MinecraftClient.getInstance();
-				client.execute(() -> SaveToast.show(client, Text.translatable("quicksave.toast.autosaved"),
-						Text.translatable("quicksave.toast.took", result.millis())));
+				String world = result.outcome().world();
+				String slot = result.outcome().slot();
+				client.execute(() -> {
+					SaveToast.show(client, Text.translatable("quicksave.toast.autosaved"),
+							Text.translatable("quicksave.toast.took", result.millis()));
+					// The recent capture right away (the quit autosave lands while the world is
+					// closing and no frame will come), replaced by a fresh one if a frame does.
+					byte[] recent = Thumbnails.recent();
+					if (recent != null) {
+						writeThumbnail(world, slot, recent);
+					}
+					if (client.world != null) {
+						Thumbnails.request(png -> writeThumbnail(world, slot, png));
+					}
+				});
 			}
 		});
 
+		// Keep a fresh capture around for the quit autosave (Save and Quit is on the pause menu).
+		ScreenEvents.BEFORE_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+			if (screen instanceof GameMenuScreen && client.world != null) {
+				Thumbnails.request(png -> { });
+			}
+		});
 		ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
 			if (screen instanceof GameMenuScreen gameMenu) {
 				PauseMenuButtons.addTo(client, gameMenu);
@@ -68,6 +101,14 @@ public class QuicksaveClient implements ClientModInitializer {
 				RecoveryPrompt.onTitleScreen(client, screen);
 			}
 		});
+	}
+
+	private static void writeThumbnail(String world, String slot, byte[] png) {
+		try {
+			SnapshotStore.store(world).writeThumbnail(slot, png);
+		} catch (Exception e) {
+			QuicksaveMod.LOGGER.warn("Could not write the thumbnail of {}", slot, e);
+		}
 	}
 
 	public static void onQuicksaveKey(MinecraftClient client) {

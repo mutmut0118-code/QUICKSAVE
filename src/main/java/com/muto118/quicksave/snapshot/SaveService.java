@@ -53,7 +53,13 @@ public final class SaveService {
 	/** Must run on the server thread. Checks the guard, then flushes and snapshots. */
 	public static Result trySave(MinecraftServer server, @Nullable ServerPlayerEntity player, SlotType type,
 			@Nullable String name) {
-		Result result = doSave(server, player, type, name);
+		return trySave(server, player, type, name, null);
+	}
+
+	/** @param thumbnail PNG for the slot's thumb.png (taken on the client), or null */
+	public static Result trySave(MinecraftServer server, @Nullable ServerPlayerEntity player, SlotType type,
+			@Nullable String name, byte @Nullable [] thumbnail) {
+		Result result = doSave(server, player, type, name, thumbnail);
 		for (Listener listener : LISTENERS) {
 			try {
 				listener.onSave(type, result);
@@ -65,7 +71,7 @@ public final class SaveService {
 	}
 
 	private static Result doSave(MinecraftServer server, @Nullable ServerPlayerEntity player, SlotType type,
-			@Nullable String name) {
+			@Nullable String name, byte @Nullable [] thumbnail) {
 		SaveGuard.Refusal refusal = SaveGuard.check(server, player);
 		if (refusal != null) {
 			return new Result(refusal, null, null, 0L);
@@ -76,7 +82,7 @@ public final class SaveService {
 		long start = System.nanoTime();
 		SnapshotStore.SaveOutcome[] saved = new SnapshotStore.SaveOutcome[1];
 		try {
-			WorldFlusher.runFlushed(server, () -> saved[0] = SnapshotStore.save(worldDir, world, meta));
+			WorldFlusher.runFlushed(server, () -> saved[0] = SnapshotStore.save(worldDir, world, meta, thumbnail));
 		} catch (Exception e) {
 			QuicksaveMod.LOGGER.error("Saving '{}' ({}) failed", world, type, e);
 			return new Result(null, e, null, 0L);

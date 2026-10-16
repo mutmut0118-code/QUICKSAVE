@@ -1,6 +1,8 @@
 package com.muto118.quicksave.selftest;
 
+import com.muto118.quicksave.QuicksaveClient;
 import com.muto118.quicksave.QuicksaveMod;
+import com.muto118.quicksave.compat.ModMenuIntegration;
 import com.muto118.quicksave.config.QuicksaveConfig;
 import com.muto118.quicksave.flow.AutosaveScheduler;
 import com.muto118.quicksave.flow.RecoveryPrompt;
@@ -10,6 +12,7 @@ import com.muto118.quicksave.guard.SaveGuard;
 import com.muto118.quicksave.snapshot.SaveService;
 import com.muto118.quicksave.snapshot.SlotType;
 import com.muto118.quicksave.snapshot.SnapshotStore;
+import com.muto118.quicksave.ui.LoadMenuScreen;
 import com.muto118.quicksave.ui.QuicksaveDeathScreen;
 import com.muto118.quicksave.ui.SaveNameScreen;
 import net.fabricmc.api.ClientModInitializer;
@@ -24,6 +27,7 @@ import net.minecraft.client.gui.screen.DeathScreen;
 import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.MessageScreen;
 import net.minecraft.client.gui.screen.NoticeScreen;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.world.CreateWorldScreen;
 import net.minecraft.client.gui.screen.world.WorldCreator;
@@ -110,6 +114,9 @@ public class SelfTestClient implements ClientModInitializer {
 	private boolean sawCamPhase;
 	private boolean countdownShot;
 	private BlockPos bedPos;
+	private String timerAutosave;
+	private String manualSlot;
+	private String renamedSlot;
 	private Set<String> slotsBefore = Set.of();
 	private boolean earlyCamShot;
 
@@ -240,6 +247,27 @@ public class SelfTestClient implements ClientModInitializer {
 			return false;
 		});
 
+		step("sprint jump does not count as falling (regression)", (c, t) -> {
+			if (t == 20) {
+				c.player.setSprinting(true);
+				c.player.jump();
+			}
+			if (t == 23) {
+				if (c.player.isOnGround()) {
+					throw new IllegalStateException("player isn't airborne after jumping");
+				}
+				requestSave(c, SlotType.QUICK, null);
+			}
+			SaveService.Result result = SaveRequests.lastResult();
+			if (t > 23 && result != this.resultBefore && result != null) {
+				if (!result.success()) {
+					throw new IllegalStateException("save refused mid-jump: " + result);
+				}
+				return true;
+			}
+			return false;
+		});
+
 		// --- Saving ---
 		step("F6 quicksave", (c, t) -> {
 			if (t == 20) {
@@ -253,6 +281,7 @@ public class SelfTestClient implements ClientModInitializer {
 				}
 				SnapshotStore.Slot slot = SnapshotStore.latest(worldName(c), List.of(SlotType.QUICK)).orElseThrow();
 				log("quicksave slot " + slot.id() + " meta " + slot.meta());
+				expectThumbnail(c, slot.id());
 				return true;
 			}
 			return false;
@@ -299,9 +328,17 @@ public class SelfTestClient implements ClientModInitializer {
 			if (made != null) {
 				AutosaveScheduler.testIntervalTicks = 0;
 				expectAuto(made, "Autosave", "minecraft:overworld");
+				this.timerAutosave = made.id();
 				return true;
 			}
 			return false;
+		});
+		step("autosave got a thumbnail", (c, t) -> {
+			if (t < 10) {
+				return false;
+			}
+			expectThumbnail(c, this.timerAutosave);
+			return true;
 		});
 		step("dimension change autosave (Nether)", (c, t) -> {
 			if (t == 1) {
@@ -415,11 +452,74 @@ public class SelfTestClient implements ClientModInitializer {
 				if (latest.meta().type() != SlotType.MANUAL || !MANUAL_NAME.equals(latest.meta().name())) {
 					throw new IllegalStateException("latest save is not the named manual save: " + latest);
 				}
+				this.manualSlot = latest.id();
+				expectThumbnail(c, latest.id());
 				return true;
 			}
 			return false;
 		});
 
+		step("pause menu Load opens the load menu", (c, t) -> {
+			if (t == 10) {
+				c.setScreen(new GameMenuScreen(true));
+			}
+			if (t == 15) {
+				press(c.currentScreen.children(), "quicksave.menu.load");
+			}
+			if (t == 25) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				int expected = SnapshotStore.list(worldName(c)).size();
+				if (menu.entryCount() != expected) {
+					throw new IllegalStateException("load menu shows " + menu.entryCount() + " saves, store has " + expected);
+				}
+				screenshot(c);
+				return true;
+			}
+			return false;
+		});
+		step("load menu Rename", (c, t) -> {
+			if (t == 1) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				this.renamedSlot = SnapshotStore.latest(worldName(c), List.of(SlotType.AUTO)).orElseThrow().id();
+				menu.select(this.renamedSlot);
+				press(menu.children(), "quicksave.load_menu.rename");
+			}
+			if (t == 5) {
+				SaveNameScreen prompt = (SaveNameScreen) c.currentScreen;
+				prompt.setName("Renamed by the test");
+				prompt.save();
+			}
+			if (t == 10) {
+				if (!(c.currentScreen instanceof LoadMenuScreen)) {
+					throw new IllegalStateException("Rename didn't return to the load menu: " + c.currentScreen);
+				}
+				String name = SnapshotStore.list(worldName(c)).stream().filter(slot -> slot.id().equals(this.renamedSlot))
+						.findFirst().orElseThrow().meta().name();
+				if (!"Renamed by the test".equals(name)) {
+					throw new IllegalStateException("rename didn't stick: " + name);
+				}
+				return true;
+			}
+			return false;
+		});
+		step("load menu Delete", (c, t) -> {
+			if (t == 1) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				menu.select(this.renamedSlot);
+				press(menu.children(), "quicksave.load_menu.delete");
+			}
+			if (t == 5) {
+				press(c.currentScreen.children(), "quicksave.load_menu.delete"); // the confirm button
+			}
+			if (t > 5 && SnapshotStore.list(worldName(c)).stream().noneMatch(slot -> slot.id().equals(this.renamedSlot))
+					&& c.currentScreen instanceof LoadMenuScreen menu
+					&& menu.entryCount() == SnapshotStore.list(worldName(c)).size()) {
+				assertConsistent(c);
+				c.setScreen(null);
+				return true;
+			}
+			return false;
+		});
 		step("storage cap prunes autosaves, then old quicksaves", (c, t) -> {
 			if (t == 20) {
 				log("store size before pruning: " + (SnapshotStore.store(worldName(c)).totalBytes() >> 10) + " KB");
@@ -526,6 +626,35 @@ public class SelfTestClient implements ClientModInitializer {
 			verifyRewound(c);
 			return true;
 		});
+		step("load a chosen save from the load menu", (c, t) -> {
+			if (t == 20) {
+				onServer(c, player -> {
+					player.getServerWorld().setBlockState(this.diamondPos, Blocks.DIAMOND_BLOCK.getDefaultState());
+					return null;
+				});
+				c.setScreen(new GameMenuScreen(true));
+			}
+			if (t == 25) {
+				press(c.currentScreen.children(), "quicksave.menu.load");
+			}
+			if (t == 30) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				if (!menu.select(this.manualSlot)) {
+					throw new IllegalStateException("manual save not in the load menu");
+				}
+				press(menu.children(), "quicksave.load_menu.load");
+			}
+			if (t > 30 && c.currentScreen instanceof ConfirmScreen confirm) {
+				press(confirm.children(), "gui.yes");
+				return true;
+			}
+			return false;
+		});
+		step("world reopens after loading from the menu", (c, t) -> inWorld(c) && waitInWorld(t));
+		step("verify rewind (load menu)", (c, t) -> {
+			verifyRewound(c);
+			return true;
+		});
 
 		// --- Quit while dead, rejoin ---
 		step("die again", (c, t) -> {
@@ -567,10 +696,33 @@ public class SelfTestClient implements ClientModInitializer {
 			if (c.currentScreen instanceof QuicksaveDeathScreen screen) {
 				if (screen.inCamPhase()) {
 					screen.mouseClicked(0, 0, 0);
-				} else if (find(screen.children(), "quicksave.death.load").active) {
-					press(screen.children(), "quicksave.death.load");
+				} else if (find(screen.children(), "quicksave.death.load_menu").active) {
+					// Load... then Back: the countdown must not fire behind the menu or after it.
+					press(screen.children(), "quicksave.death.load_menu");
 					return true;
 				}
+			}
+			return false;
+		});
+		step("Back from the death load menu, countdown stopped", (c, t) -> {
+			if (t == 10) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				screenshot(c);
+				press(menu.children(), "gui.back");
+			}
+			if (t > 10 && t < 140 && !(c.currentScreen instanceof QuicksaveDeathScreen)) {
+				throw new IllegalStateException("left the death screen without a click: " + c.currentScreen);
+			}
+			if (t == 140) {
+				QuicksaveDeathScreen screen = (QuicksaveDeathScreen) c.currentScreen;
+				press(screen.children(), "quicksave.death.load_menu");
+			}
+			if (t == 150) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				SnapshotStore.Slot newest = SnapshotStore.latest(WORLD, null).orElseThrow();
+				menu.select(newest.id());
+				press(menu.children(), "quicksave.load_menu.load"); // from the death screen: no confirm
+				return true;
 			}
 			return false;
 		});
@@ -632,6 +784,24 @@ public class SelfTestClient implements ClientModInitializer {
 					throw new IllegalStateException(String.join("; ", f));
 				}
 				press(notice.children(), "gui.ok");
+				return true;
+			}
+			return false;
+		});
+		step("Mod Menu config screen (Cloth Config)", (c, t) -> {
+			if (t == 10) {
+				if (!QuicksaveClient.LOAD_MENU_KEY.isUnbound()) {
+					throw new IllegalStateException("the load menu key should be unbound by default");
+				}
+				Screen config = new ModMenuIntegration().getModConfigScreenFactory().create(c.currentScreen);
+				if (config == null) {
+					throw new IllegalStateException("no config screen although Cloth Config is loaded");
+				}
+				c.setScreen(config);
+			}
+			if (t == 20) {
+				screenshot(c);
+				c.setScreen(new TitleScreen());
 				return true;
 			}
 			return false;
@@ -794,6 +964,13 @@ public class SelfTestClient implements ClientModInitializer {
 		if (slot.meta().type() != SlotType.AUTO || !name.equals(slot.meta().name())
 				|| !dimension.equals(slot.meta().dimension())) {
 			throw new IllegalStateException("expected autosave '" + name + "' in " + dimension + ", got " + slot.meta());
+		}
+	}
+
+	private static void expectThumbnail(MinecraftClient c, String slot) throws Exception {
+		Path thumb = SnapshotStore.store(worldName(c)).thumbnail(slot);
+		if (!Files.isRegularFile(thumb) || Files.size(thumb) < 1000) {
+			throw new IllegalStateException("no thumbnail for " + slot);
 		}
 	}
 

@@ -10,6 +10,8 @@
 	},
 	"depends": {
 		"quicksave": "*",
+		"modmenu": "*",
+		"cloth-config": "*",
 		"fabric-api": "*"
 	}
 }

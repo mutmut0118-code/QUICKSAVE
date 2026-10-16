@@ -38,6 +38,7 @@ import java.util.UUID;
  *   objects/tmp/                  in-flight copies, moved into place when complete
  *   saves/&lt;slot&gt;/manifest.json   every world file: path, size, mtime, hash
  *   saves/&lt;slot&gt;/meta.json       {@link SaveMeta}
+ *   saves/&lt;slot&gt;/thumb.png       256x144 screenshot (optional)
  *   saves/&lt;slot&gt;/complete        written last; a slot without it is ignored
  *   _pre_load/manifest.json       the world right before the last load
  *   _pre_load/restore.inprogress  present while a restore runs (world=, slot=, started=)
@@ -55,6 +56,7 @@ import java.util.UUID;
 public final class WorldStore {
 	static final String MANIFEST = "manifest.json";
 	static final String META = "meta.json";
+	public static final String THUMBNAIL = "thumb.png";
 	static final String COMPLETE = "complete";
 	static final String PRE_LOAD = "_pre_load";
 	static final String RESTORE_MARKER = "restore.inprogress";
@@ -182,6 +184,11 @@ public final class WorldStore {
 	 * while this runs (server thread with saving disabled, or server stopped).
 	 */
 	public SaveStats save(Path worldDir, String slotId, SaveMeta meta) throws IOException {
+		return this.save(worldDir, slotId, meta, null);
+	}
+
+	/** @param thumbnail PNG bytes for thumb.png, or null */
+	public SaveStats save(Path worldDir, String slotId, SaveMeta meta, byte @Nullable [] thumbnail) throws IOException {
 		synchronized (LOCK) {
 			this.migrateLegacySlots();
 			Path slotDir = slotDir(slotId);
@@ -193,6 +200,9 @@ public final class WorldStore {
 			Manifest manifest = this.snapshot(worldDir, counters, bytes);
 			writeJson(tmp.resolve(MANIFEST), manifest);
 			writeJson(tmp.resolve(META), meta);
+			if (thumbnail != null) {
+				Files.write(tmp.resolve(THUMBNAIL), thumbnail);
+			}
 			Files.writeString(tmp.resolve(COMPLETE), Instant.ofEpochMilli(meta.createdMs()).toString(), StandardCharsets.UTF_8);
 			deleteRecursively(slotDir);
 			Files.move(tmp, slotDir, StandardCopyOption.ATOMIC_MOVE);
@@ -486,9 +496,45 @@ public final class WorldStore {
 
 	// ---------------------------------------------------------------- rotation, gc, pruning
 
+	/** Deletes a slot and the objects only it used. */
 	public void delete(String slotId) throws IOException {
 		synchronized (LOCK) {
 			deleteRecursively(slotDir(slotId));
+			this.gc();
+		}
+	}
+
+	/** Changes a slot's display name (meta.json is rewritten atomically). */
+	public void rename(String slotId, String name) throws IOException {
+		synchronized (LOCK) {
+			Path slotDir = slotDir(slotId);
+			if (!Files.isRegularFile(slotDir.resolve(COMPLETE))) {
+				throw new NoSuchFileException(slotDir.toString());
+			}
+			SaveMeta old = readMeta(slotDir);
+			SaveMeta renamed = new SaveMeta(name, old.type(), old.createdMs(), old.dayTime(), old.dimension(), old.x(),
+					old.y(), old.z(), old.health(), old.playtimeTicks());
+			Path tmp = slotDir.resolve(META + ".tmp");
+			writeJson(tmp, renamed);
+			Files.move(tmp, slotDir.resolve(META), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+		}
+	}
+
+	/** Path of a slot's thumbnail (may not exist). */
+	public Path thumbnail(String slotId) {
+		return slotDir(slotId).resolve(THUMBNAIL);
+	}
+
+	/** Adds a thumbnail to an existing slot (autosaves get theirs after the fact). No-op if the slot is gone. */
+	public void writeThumbnail(String slotId, byte[] png) throws IOException {
+		synchronized (LOCK) {
+			Path slotDir = slotDir(slotId);
+			if (!Files.isRegularFile(slotDir.resolve(COMPLETE))) {
+				return;
+			}
+			Path tmp = slotDir.resolve(THUMBNAIL + ".tmp");
+			Files.write(tmp, png);
+			Files.move(tmp, slotDir.resolve(THUMBNAIL), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 		}
 	}
 

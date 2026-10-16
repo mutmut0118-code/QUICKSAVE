@@ -22,8 +22,8 @@ import org.jetbrains.annotations.Nullable;
  * <li>"You Died!", the death message and "Loading last save in N...". At 0 the
  * last save loads. With {@code deathCountdownSeconds = 0} it waits for a click.</li>
  * </ol>
- * Buttons: Load Last Save, Quit to Title. No Respawn. ("Load..." arrives with
- * the load menu in M4.)
+ * Buttons: Load Last Save, Load... (the load menu; stops the countdown), Quit to
+ * Title. No Respawn.
  */
 public class QuicksaveDeathScreen extends Screen {
 	private static final Text TITLE = Text.translatable("deathScreen.title");
@@ -39,7 +39,10 @@ public class QuicksaveDeathScreen extends Screen {
 	private final float startYaw;
 	private long camSkippedAt = -1L;
 	private ButtonWidget loadButton;
+	private ButtonWidget loadMenuButton;
 	private ButtonWidget quitButton;
+	/** Set once the player opened the load menu: from then on, wait for a click. */
+	private boolean countdownCancelled;
 	private boolean actionTaken;
 
 	public QuicksaveDeathScreen(@Nullable Text message) {
@@ -56,11 +59,15 @@ public class QuicksaveDeathScreen extends Screen {
 	protected void init() {
 		this.loadButton = this.addDrawableChild(ButtonWidget.builder(Text.translatable("quicksave.death.load"),
 				button -> this.load()).dimensions(this.width / 2 - 100, this.height / 4 + 72, 200, 20).build());
+		this.loadMenuButton = this.addDrawableChild(ButtonWidget.builder(Text.translatable("quicksave.death.load_menu"), button -> {
+			this.countdownCancelled = true;
+			LoadMenuScreen.open(this.client, this, true);
+		}).dimensions(this.width / 2 - 100, this.height / 4 + 96, 200, 20).build());
 		this.quitButton = this.addDrawableChild(ButtonWidget.builder(Text.translatable("quicksave.death.quit"), button -> {
 			this.actionTaken = true;
 			this.updateButtons();
 			quitToTitle(this.client);
-		}).dimensions(this.width / 2 - 100, this.height / 4 + 96, 200, 20).build());
+		}).dimensions(this.width / 2 - 100, this.height / 4 + 120, 200, 20).build());
 		this.updateButtons();
 	}
 
@@ -101,7 +108,7 @@ public class QuicksaveDeathScreen extends Screen {
 
 	/** Remaining countdown in ms, or -1 when waiting for a click. */
 	private long remainingCountdown() {
-		if (this.countdownMs <= 0) {
+		if (this.countdownMs <= 0 || this.countdownCancelled) {
 			return -1L;
 		}
 		return Math.max(0L, this.uiAt() + this.countdownMs - this.elapsed());
@@ -120,8 +127,10 @@ public class QuicksaveDeathScreen extends Screen {
 		boolean visible = !this.inCamPhase();
 		boolean active = visible && !this.actionTaken && this.elapsed() >= MIN_BUTTON_DELAY_MS;
 		this.loadButton.visible = visible;
+		this.loadMenuButton.visible = visible;
 		this.quitButton.visible = visible;
 		this.loadButton.active = active;
+		this.loadMenuButton.active = active;
 		this.quitButton.active = active;
 	}
 

@@ -316,6 +316,46 @@ class WorldStoreTest {
 	}
 
 	@Test
+	void renameChangesOnlyTheName() throws IOException {
+		save("manual-1", SlotType.MANUAL);
+		SaveMeta before = this.store.list().get(0).meta();
+		this.store.rename("manual-1", "Before the dragon");
+		SaveMeta after = this.store.list().get(0).meta();
+		assertEquals("Before the dragon", after.name());
+		assertEquals(before.type(), after.type());
+		assertEquals(before.createdMs(), after.createdMs());
+		assertThrows(IOException.class, () -> this.store.rename("nope", "x"));
+	}
+
+	@Test
+	void thumbnailsAreStoredWithTheSlotOrAddedLater() throws IOException {
+		byte[] png = bytes(9, 2000);
+		this.store.save(this.world, "quick-1", meta(SlotType.QUICK, this.clock += 1000), png);
+		assertArrayEquals(png, Files.readAllBytes(this.store.thumbnail("quick-1")));
+
+		save("auto-1", SlotType.AUTO);
+		assertFalse(Files.exists(this.store.thumbnail("auto-1")));
+		this.store.writeThumbnail("auto-1", png);
+		assertArrayEquals(png, Files.readAllBytes(this.store.thumbnail("auto-1")));
+
+		this.store.writeThumbnail("rotated-out", png); // slot already gone: ignored
+		assertFalse(Files.exists(this.store.thumbnail("rotated-out")));
+		assertEquals(List.of(), this.store.checkConsistency());
+	}
+
+	@Test
+	void deleteRemovesTheSlotAndObjectsOnlyItUsed() throws IOException {
+		save("quick-1", SlotType.QUICK);
+		write("region/r.0.0.mca", bytes(90, 8192));
+		save("quick-2", SlotType.QUICK);
+		this.store.delete("quick-2");
+		assertEquals(List.of("quick-1"), this.store.list().stream().map(SnapshotStore.Slot::id).toList());
+		assertEquals(referencedHashes(), objectHashes());
+		this.store.restore(this.world, "quick-1");
+		assertArrayEquals(bytes(2, 8192), Files.readAllBytes(this.world.resolve("region/r.0.0.mca")));
+	}
+
+	@Test
 	void manifestPathsCannotEscapeTheWorldFolder() {
 		assertThrows(IOException.class, () -> WorldStore.resolveSafely(this.world, "../other/level.dat"));
 		assertThrows(IOException.class, () -> WorldStore.resolveSafely(this.world, "region/../../x"));
