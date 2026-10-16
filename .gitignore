@@ -1,0 +1,13 @@
+.gradle/
+build/
+out/
+classes/
+run/
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+bin/
+.DS_Store
+remappedSrc/

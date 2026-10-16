@@ -1,0 +1,94 @@
+plugins {
+	id 'fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+}
+
+loom {
+	splitEnvironmentSourceSets()
+}
+
+// Dev-only test mod. Never packaged into the release jar.
+sourceSets {
+	selftest {
+		compileClasspath += sourceSets.main.compileClasspath + sourceSets.client.compileClasspath
+		compileClasspath += sourceSets.main.output + sourceSets.client.output
+		runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.client.runtimeClasspath
+		runtimeClasspath += sourceSets.main.output + sourceSets.client.output
+	}
+}
+
+loom {
+	mods {
+		"quicksave" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+		"quicksave-selftest" {
+			sourceSet sourceSets.selftest
+		}
+	}
+
+	runs {
+		// Headless-capable end-to-end check of the death -> restore loop.
+		// ./gradlew runSelfTest   (on a headless box: xvfb-run ./gradlew runSelfTest)
+		selfTest {
+			client()
+			name = "Quicksave Self-Test"
+			source sourceSets.selftest
+			runDir "run/selftest"
+		}
+	}
+}
+
+tasks.named("runSelfTest") {
+	doFirst {
+		def dir = file("run/selftest")
+		delete file("run/selftest/saves"), file("run/selftest/quicksaves"), file("run/selftest/selftest-result.txt")
+		dir.mkdirs()
+		// Skip first-launch screens and keep rendering cheap for software GL.
+		file("run/selftest/options.txt").text = "onboardAccessibility:false\nrenderDistance:4\nsimulationDistance:5\ntutorialStep:none\nnarrator:0\n"
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+processResources {
+	inputs.property "version", project.version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": inputs.properties.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	inputs.property "archivesName", project.base.archivesName
+
+	from("LICENSE") {
+		rename { "${it}_${inputs.properties.archivesName}" }
+	}
+}

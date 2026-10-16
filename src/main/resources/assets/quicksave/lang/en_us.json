@@ -1,0 +1,12 @@
+{
+	"quicksave.command.inactive": "Quicksave only works in singleplayer worlds that are not open to LAN.",
+	"quicksave.command.save.done": "Quicksaved (%s ms).",
+	"quicksave.command.save.failed": "Quicksave failed: %s",
+	"quicksave.death.loading": "Your last save is waiting.",
+	"quicksave.death.load": "Load Last Save",
+	"quicksave.death.quit": "Quit to Title",
+	"quicksave.reload.closing": "Closing world...",
+	"quicksave.reload.restoring": "Loading last save...",
+	"quicksave.reload.failed.title": "Load failed",
+	"quicksave.reload.failed.message": "The save could not be restored: %s. Your world was left as it was before the load (see the log for details)."
+}
