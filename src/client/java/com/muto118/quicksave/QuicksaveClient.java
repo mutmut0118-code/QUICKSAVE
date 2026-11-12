@@ -59,6 +59,7 @@ public class QuicksaveClient implements ClientModInitializer {
 				}
 			}
 			SaveRequests.tick(client);
+			ReloadController.tick(client);
 		});
 
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {

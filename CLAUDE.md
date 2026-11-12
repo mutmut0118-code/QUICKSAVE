@@ -12,7 +12,7 @@ closes the world, restores your last save over it and reopens it, like Skyrim.
 
 ## Status
 
-**Current milestone: M4 + death screen options done; PR open for the user's local test. The user dropped M5 (2026-10-16): no reskin, resource packs cover the look. Nothing is planned next; wait for the user's feedback / bug reports. v2 (hot restore) stays a stretch idea only.**
+**Current milestone: M4 + death screen options confirmed working by the user (2026-11-12); Smooth Loading Screen compat fix (0.4.2) awaiting their test. The user dropped M5 (2026-10-16): no reskin, resource packs cover the look. Nothing is planned next; wait for the user's feedback / bug reports. v2 (hot restore) stays a stretch idea only.**
 
 | Milestone | State |
 | --- | --- |
@@ -20,9 +20,27 @@ closes the world, restores your last save over it and reopens it, like Skyrim.
 | M2 Real UX | Done, confirmed working by the user locally (2026-10-16). |
 | M3 Content-addressed storage | Done, played by the user locally (2026-10-16). Their one bug report (sprint jumps counted as "falling") is fixed in M4. |
 | M4 Load menu + config screen | Done. 21 JUnit tests + `runSelfTest` 44/44 headless. Awaiting the user's local test. |
-| Death screen options (replaces M5) | Done. `pauseOnDeathScreen`, `deathScreenTint`, `deathScreenVignette`, `deathTitle`. Self-test 44/44. Awaiting the user's local test. |
+| Death screen options (replaces M5) | Done, confirmed working by the user (2026-11-12). |
+| Smooth Loading Screen compat (0.4.2) | Done. User bug: after a Quicksave load the first-person hand was gone and that mod's join transition didn't play. Self-test 46/46 in dev and in a production launch with that mod. Awaiting the user's test in their pack ("Drifter Test"). |
 | M5 Pack hardening + Skyrim reskin | **Dropped by the user.** Resource packs can restyle text (every string is a translation key). |
 | v2 Hot restore | Not started |
+
+### Compatibility: Smooth Loading Screen (0.4.2)
+
+[Smooth Loading Screen](https://modrinth.com/mod/smooth-loading-screen) (mod id `smoothloadingscreen`, closed source, All Rights Reserved, bundles "juxtui" and Faster Screenshots) is in the user's modpack. Read only through its bytecode/refmap for interoperability (`javap`); no code copied, no dependency. Findings for 1.0.10+1.21-1.21.1:
+- It arms its join transition when a world is clicked in the Singleplayer list (`WorldListWidget.WorldEntry#play` → `juxtui.util.PanoramaHover.forceApply(client, levelSummary.getName())`, i.e. the world **folder** name) and resets its state on the title screen (`PanoramaHover.enterTitle` → `PanoramaAlign.cancel()`). Leaving via the pause menu opens its `ExitPanoramaScreen` (sets an exit state); `MinecraftClient#disconnect` triggers a one-shot panorama capture.
+- It hides the first-person hand three ways: `IrisHandExitMixin` pushes the hand off-screen while `PanoramaAlign.hudAlpha() < 1` (exit state `exitHudStartNs` set, or its 1.2 s entry fade); its frame-by-frame capture (`WorldPanoramaCaptureFrame.begin/finish`) hides the HUD and sets vanilla `GameRenderer#setRenderingPanorama(true)` (vanilla `renderHand` returns early while that is set, and the FOV is forced).
+- Quicksave's reload goes world → same world without the title screen or the world list, so nothing reset its leftover state and nothing armed the transition: no fade, and the hand stayed hidden.
+
+Fix (`compat.SmoothLoadingScreenCompat`, reflection only, disables itself after the first failure):
+- `ReloadController.reopen` → `beforeReopen`: `PanoramaAlign.cancel()` (what the title screen does) then `PanoramaHover.forceApply(client, worldFolderName)` (what the world list does).
+- `ReloadController.tick` → once the reopened world has been on screen with no screen open and that mod's transition is over (`PanoramaAlign.isArmed/isPreFogging/isSwinging/isHandoverAnimating/isCameraTransitionActive` all false) for 3 s: `afterLoadSettled` finishes a capture still `active()`, calls `endExit()` if `hudAlpha() < 1`, and clears vanilla `renderingPanorama` (this last check runs without the mod too). A transition still "running" after 15 s is cancelled (`PanoramaAlign.cancel()`).
+- Self-test: after each load, `handProblems` checks `renderingPanorama`, F1 `hudHidden`, a stuck third-person camera and (with the mod) `hudAlpha`; before F9 it plants `setRenderingPanorama(true)` and the mod's `beginWorldExit()`. With the mod present each load must arm its transition. The world is now re-entered via Save and Quit + clicking it in the world list (the user's path). 46 steps.
+- In dev runs that mod can't work (Faster Screenshots reflects on `NativeImage` field `pixels`/`field_4988`; Yarn has `pointer`): test it with the production launcher below.
+
+### Production compat testing (`tools/prodtest/`)
+
+Dev runs use Yarn names, so mods that reflect on intermediary names misbehave there. `tools/prodtest/run.sh [mod.jar ...]` does a real production Fabric launch (official client jar + Mojang libraries + Fabric Loader profile, assembled once by `prepare.py` into the gitignored `run/prod`) with our release jar, the remapped self-test jar (`./gradlew remapSelftestJar` → `build/selftest-libs/`; its remap classpath includes our classes so calls like `loadMenu.children()` resolve), Fabric API, Mod Menu, Cloth Config and any extra jars, headless via xvfb. Result in `run/prod/selftest-result.txt`. Run `./gradlew build remapSelftestJar` first. Downloading and running *other* third-party mods (e.g. Sodium/Iris) may need the user's OK in auto mode.
 
 ### Death screen options (after M4, instead of M5)
 
@@ -180,7 +198,9 @@ bigger world.
   death screen Load... → Back stops the countdown → Load... → load, the load-menu key is unbound
   by default, and the Cloth Config screen opens through Mod Menu. Death screen options: the
   game is paused behind the default death screen; with `deathTitle` "Wasted", tint off,
-  vignette on and pause off, the title is used and the game isn't paused (screenshot). 44 steps.
+  vignette on and pause off, the title is used and the game isn't paused (screenshot). Since
+  0.4.2: Save and Quit + rejoin via the world list, hand checks after every load, planted stuck
+  states before F9, Smooth Loading Screen transition armed per load (when present). 46 steps.
   Hooks: `AutosaveScheduler.testIntervalTicks`.
 - `./gradlew test` (part of `build`): JUnit 5 tests for `Xxh64` and `WorldStore` in
   `src/test` (round trip, real copies not links, incremental skip, racy rewrite, mtime kept
@@ -323,7 +343,7 @@ when a slot rotates out. `maxStorageMB` cap prunes the oldest autosaves first.
 | `snapshot.Xxh64` | main | streaming xxHash64 |
 | `snapshot.WorldFlusher` | main | server thread: save-off, `saveAll(false, true, true)`, run copy, restore save flags |
 | `snapshot.SaveMeta` | main | record for meta.json |
-| `flow.ReloadController` | client | state machine IDLE → CLOSING → RESTORING → REOPENING; `loadLatest(types)` |
+| `flow.ReloadController` | client | state machine IDLE → CLOSING → RESTORING → REOPENING; `loadLatest(types)`; post-load settle check |
 | `flow.SaveRequests` | client | F6 / pause-menu save flow with the toast lead-in |
 | `flow.RecoveryPrompt` | client | launch prompt for an unfinished restore |
 | `flow.AutosaveScheduler` | main | Start / timer / dimension / sleep / quit autosaves |
@@ -335,6 +355,7 @@ when a slot rotates out. `maxStorageMB` cap prunes the oldest autosaves first.
 | `ui.LoadMenuScreen` | client | load menu: thumbnails, details, Load / Rename / Delete |
 | `ui.Thumbnails` | client | clean 256x144 world captures for save thumbnails |
 | `compat.ModMenuIntegration`, `compat.ClothConfigScreen` | client | optional config screen |
+| `compat.SmoothLoadingScreenCompat` | client | arms Smooth Loading Screen's join transition on reloads, clears leftovers that hide the hand |
 | `ui.SaveToast` | client | "Quicksaving…" / "Can't save during combat" toasts |
 | `mixin.MinecraftClientMixin` | client | swaps DeathScreen in setScreen |
 | `mixin.DeathScreenAccessor` | client | reads the vanilla death message |

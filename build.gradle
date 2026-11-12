@@ -125,3 +125,21 @@ jar {
 		rename { "${it}_${inputs.properties.archivesName}" }
 	}
 }
+
+// Production-style compat testing: the self-test mod remapped to intermediary so it can run
+// next to other mods' release jars in a real (non-dev) Fabric launch. See CLAUDE.md.
+def selftestDevJar = tasks.register("selftestDevJar", Jar) {
+	from sourceSets.selftest.output
+	archiveBaseName = "quicksave-selftest"
+	archiveClassifier = "dev"
+	destinationDirectory = layout.buildDirectory.dir("devlibs")
+}
+
+tasks.register("remapSelftestJar", net.fabricmc.loom.task.RemapJarTask) {
+	inputFile = selftestDevJar.flatMap { it.archiveFile }
+	archiveBaseName = "quicksave-selftest"
+	archiveClassifier = ""
+	destinationDirectory = layout.buildDirectory.dir("selftest-libs")
+	// So calls like loadMenu.children() resolve through our classes to vanilla methods.
+	classpath.from(sourceSets.main.output, sourceSets.client.output)
+}

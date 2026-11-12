@@ -3,6 +3,7 @@ package com.muto118.quicksave.selftest;
 import com.muto118.quicksave.QuicksaveClient;
 import com.muto118.quicksave.QuicksaveMod;
 import com.muto118.quicksave.compat.ModMenuIntegration;
+import com.muto118.quicksave.compat.SmoothLoadingScreenCompat;
 import com.muto118.quicksave.config.QuicksaveConfig;
 import com.muto118.quicksave.flow.AutosaveScheduler;
 import com.muto118.quicksave.flow.RecoveryPrompt;
@@ -30,6 +31,8 @@ import net.minecraft.client.gui.screen.NoticeScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.world.CreateWorldScreen;
+import net.minecraft.client.gui.screen.world.SelectWorldScreen;
+import net.minecraft.client.gui.screen.world.WorldListWidget;
 import net.minecraft.client.gui.screen.world.WorldCreator;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
@@ -113,6 +116,9 @@ public class SelfTestClient implements ClientModInitializer {
 	private long deathScreenSeenAt = -1L;
 	private boolean sawCamPhase;
 	private boolean countdownShot;
+	private int inWorldSince = -1;
+	private boolean slsTransitionSeen;
+	private int transitionDoneAt = -1;
 	private BlockPos bedPos;
 	private String timerAutosave;
 	private String manualSlot;
@@ -153,6 +159,46 @@ public class SelfTestClient implements ClientModInitializer {
 			if (start.isPresent()) {
 				if (!"Start".equals(start.get().meta().name())) {
 					throw new IllegalStateException("first autosave isn't the Start save: " + start.get());
+				}
+				return true;
+			}
+			return false;
+		});
+		// Join the way players do: Save and Quit from the pause menu, then click the world in
+		// the Singleplayer list (some loading-screen mods, e.g. Smooth Loading Screen, only arm
+		// their transitions on these paths).
+		step("Save and Quit, back to the title screen", (c, t) -> {
+			if (t == 20) {
+				c.setScreen(new GameMenuScreen(true));
+			}
+			if (t == 25) {
+				press(c.currentScreen.children(), "menu.returnToMenu");
+			}
+			return t > 25 && c.world == null && c.currentScreen instanceof TitleScreen;
+		});
+		step("rejoin by clicking the world in the Singleplayer list", (c, t) -> {
+			if (t == 20) {
+				c.setScreen(new SelectWorldScreen(c.currentScreen));
+			}
+			if (t == 40) {
+				WorldListWidget list = (WorldListWidget) c.currentScreen.children().stream()
+						.filter(e -> e instanceof WorldListWidget).findFirst()
+						.orElseThrow(() -> new IllegalStateException("no world list"));
+				WorldListWidget.WorldEntry entry = list.children().stream()
+						.filter(e -> e instanceof WorldListWidget.WorldEntry w && WORLD.equals(w.getLevelDisplayName()))
+						.map(e -> (WorldListWidget.WorldEntry) e).findFirst()
+						.orElseThrow(() -> new IllegalStateException("world not in the list"));
+				entry.play();
+			}
+			if (t > 40 && inWorld(c)) {
+				if (this.inWorldSince < 0) {
+					this.inWorldSince = t;
+				}
+			}
+			if (this.inWorldSince >= 0 && t - this.inWorldSince > 100) {
+				List<String> hand = handProblems(c);
+				if (!hand.isEmpty()) {
+					throw new IllegalStateException("after joining from the world list: " + String.join("; ", hand));
 				}
 				return true;
 			}
@@ -616,6 +662,10 @@ public class SelfTestClient implements ClientModInitializer {
 					player.getServerWorld().setBlockState(this.diamondPos, Blocks.DIAMOND_BLOCK.getDefaultState());
 					return null;
 				});
+				// Leave the states that hid the hand for the user (with Smooth Loading Screen):
+				// the load must still end with the hand on screen.
+				c.gameRenderer.setRenderingPanorama(true);
+				invokeSls("juxtui.util.PanoramaAlign", "beginWorldExit");
 				pressKey(GLFW.GLFW_KEY_F9);
 			}
 			if (t > 20 && c.currentScreen instanceof ConfirmScreen confirm) {
@@ -843,6 +893,11 @@ public class SelfTestClient implements ClientModInitializer {
 		if (this.done) {
 			return;
 		}
+		if (SmoothLoadingScreenCompat.isLoaded() && !this.slsTransitionSeen) {
+			Object armed = invokeSls("juxtui.util.PanoramaAlign", "isArmed");
+			Object animating = invokeSls("juxtui.util.PanoramaAlign", "isHandoverAnimating");
+			this.slsTransitionSeen = Boolean.TRUE.equals(armed) || Boolean.TRUE.equals(animating);
+		}
 		if (this.index >= this.steps.size()) {
 			finish(client, true, "all " + this.steps.size() + " steps passed");
 			return;
@@ -858,6 +913,7 @@ public class SelfTestClient implements ClientModInitializer {
 				log("ok: " + step.name());
 				this.index++;
 				this.stepTicks = 0;
+				this.transitionDoneAt = -1;
 			}
 		} catch (Throwable e) {
 			QuicksaveMod.LOGGER.error("[selftest] step '{}' failed", step.name(), e);
@@ -871,8 +927,16 @@ public class SelfTestClient implements ClientModInitializer {
 		return c.player != null && c.world != null && c.currentScreen == null && c.getServer() != null;
 	}
 
-	private static boolean waitInWorld(int ticks) {
-		return ticks > 100;
+	/** 5 s in the world, counted only once a loading-screen mod's join transition has finished. */
+	private boolean waitInWorld(int ticks) {
+		if (SmoothLoadingScreenCompat.transitionRunning()) {
+			this.transitionDoneAt = -1;
+			return false;
+		}
+		if (this.transitionDoneAt < 0 || this.transitionDoneAt > ticks) {
+			this.transitionDoneAt = ticks;
+		}
+		return ticks - this.transitionDoneAt > 100;
 	}
 
 	private static String worldName(MinecraftClient c) {
@@ -924,7 +988,59 @@ public class SelfTestClient implements ClientModInitializer {
 		return pig.getCustomName() != null && PIG_NAME.equals(pig.getCustomName().getString());
 	}
 
+	/**
+	 * Things that hide the first-person hand after a load (user report with Smooth Loading
+	 * Screen): a panorama render left on, F1-hidden HUD, a third-person camera, or that mod's
+	 * HUD/hand alpha stuck below 1.
+	 */
+	private static List<String> handProblems(MinecraftClient c) {
+		List<String> f = new ArrayList<>();
+		if (c.gameRenderer.isRenderingPanorama()) {
+			f.add("GameRenderer is still rendering a panorama (hand and HUD hidden)");
+		}
+		if (c.options.hudHidden) {
+			f.add("HUD hidden (F1 state) after the load");
+		}
+		if (c.gameRenderer.getCamera().isThirdPerson() && c.options.getPerspective().isFirstPerson()) {
+			f.add("camera stuck in third person");
+		}
+		Float slsAlpha = smoothLoadingScreenHudAlpha();
+		if (slsAlpha != null && slsAlpha < 0.999F) {
+			f.add("Smooth Loading Screen hudAlpha is " + slsAlpha + " (hand withdrawn)");
+		}
+		return f;
+	}
+
+	/** Calls a no-arg static method of Smooth Loading Screen; null when that mod isn't installed. */
+	private static Object invokeSls(String className, String method) {
+		if (!SmoothLoadingScreenCompat.isLoaded()) {
+			return null;
+		}
+		try {
+			return Class.forName(className).getMethod(method).invoke(null);
+		} catch (ReflectiveOperationException | LinkageError e) {
+			throw new IllegalStateException("Smooth Loading Screen API changed: " + className + "." + method, e);
+		}
+	}
+
+	/** Smooth Loading Screen's PanoramaAlign.hudAlpha(), or null when that mod isn't installed. */
+	private static Float smoothLoadingScreenHudAlpha() {
+		try {
+			return (Float) Class.forName("juxtui.util.PanoramaAlign").getMethod("hudAlpha").invoke(null);
+		} catch (ReflectiveOperationException | LinkageError e) {
+			return null;
+		}
+	}
+
 	private void verifyRewound(MinecraftClient c) throws Exception {
+		if (SmoothLoadingScreenCompat.isLoaded() && !this.slsTransitionSeen) {
+			throw new IllegalStateException("Smooth Loading Screen's join transition was not armed for this load");
+		}
+		this.slsTransitionSeen = false;
+		List<String> hand = handProblems(c);
+		if (!hand.isEmpty()) {
+			throw new IllegalStateException("after the load: " + String.join("; ", hand));
+		}
 		List<String> failures = onServer(c, player -> {
 			List<String> f = new ArrayList<>();
 			ServerWorld world = player.getServerWorld();
