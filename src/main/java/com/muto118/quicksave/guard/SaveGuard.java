@@ -4,9 +4,17 @@ import com.muto118.quicksave.QuicksaveMod;
 import com.muto118.quicksave.config.QuicksaveConfig;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.minecraft.entity.attribute.EntityAttributes;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.mob.MobEntity;
+import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.shape.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Map;
@@ -89,15 +97,59 @@ public final class SaveGuard {
 		return null;
 	}
 
-	/** fallDistance resets on landing; server-side velocity isn't updated for players, so it isn't used. */
+	/** How far down to look for a landing spot. Further than this counts as a deadly fall. */
+	private static final int MAX_DROP_SCAN = 64;
+
+	/**
+	 * "Falling" means a fall that would hurt: the distance already fallen plus the drop
+	 * to whatever is below is more than the safe fall distance (3 blocks by default).
+	 * A (sprint) jump on flat ground is ~1.25 blocks, so it never counts.
+	 *
+	 * <p>Why not a grace period: a save made early in a long fall would load you
+	 * back mid-air on your way to the same death, and dying loads that save again.
+	 *
+	 * <p>Server-side player velocity isn't updated from movement packets, so this
+	 * looks at position, fallDistance and the blocks below instead.
+	 */
 	private static boolean isFalling(ServerPlayerEntity player) {
-		return !player.isOnGround()
-				&& player.fallDistance > 1.0F
-				&& !player.getAbilities().flying
-				&& !player.isFallFlying()
-				&& !player.isTouchingWater()
-				&& !player.isClimbing()
-				&& !player.hasVehicle();
+		if (player.isOnGround() || player.getAbilities().flying || player.isFallFlying() || player.isTouchingWater()
+				|| player.isClimbing() || player.hasVehicle() || player.hasStatusEffect(StatusEffects.SLOW_FALLING)) {
+			return false;
+		}
+		double safe = player.getAttributeValue(EntityAttributes.GENERIC_SAFE_FALL_DISTANCE);
+		Landing landing = landingBelow(player);
+		if (landing.soft()) {
+			return false;
+		}
+		return player.fallDistance + landing.drop() > safe;
+	}
+
+	/**
+	 * @param drop blocks from the player's feet down to the landing surface
+	 *             (Double.MAX_VALUE when nothing is within reach: the void, a huge drop)
+	 * @param soft lands in water (no fall damage)
+	 */
+	private record Landing(double drop, boolean soft) {
+	}
+
+	private static Landing landingBelow(ServerPlayerEntity player) {
+		ServerWorld world = player.getServerWorld();
+		double feetY = player.getY();
+		BlockPos.Mutable pos = new BlockPos.Mutable(player.getBlockX(), MathHelper.floor(feetY), player.getBlockZ());
+		int bottom = Math.max(world.getBottomY(), pos.getY() - MAX_DROP_SCAN);
+		for (; pos.getY() >= bottom; pos.move(Direction.DOWN)) {
+			if (world.getFluidState(pos).isIn(FluidTags.WATER)) {
+				return new Landing(Math.max(0, feetY - (pos.getY() + 1)), true);
+			}
+			VoxelShape shape = world.getBlockState(pos).getCollisionShape(world, pos);
+			if (!shape.isEmpty()) {
+				double top = pos.getY() + shape.getMax(Direction.Axis.Y);
+				if (top <= feetY + 1.0E-4) {
+					return new Landing(feetY - top, false);
+				}
+			}
+		}
+		return new Landing(Double.MAX_VALUE, false);
 	}
 
 	private static boolean inCombat(MinecraftServer server, ServerPlayerEntity player, QuicksaveConfig config) {

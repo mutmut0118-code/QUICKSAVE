@@ -2,6 +2,7 @@ package com.muto118.quicksave.flow;
 
 import com.muto118.quicksave.QuicksaveClient;
 import com.muto118.quicksave.QuicksaveMod;
+import com.muto118.quicksave.compat.SmoothLoadingScreenCompat;
 import com.muto118.quicksave.snapshot.SlotType;
 import com.muto118.quicksave.snapshot.SnapshotStore;
 import com.muto118.quicksave.ui.SaveToast;
@@ -39,6 +40,13 @@ public final class ReloadController {
 	private static final long LOCK_POLL_MS = 100L;
 
 	private static volatile State state = State.IDLE;
+	/** Client ticks the reopened world must be on screen, transition over, before the check runs. */
+	private static final int SETTLE_TICKS = 60;
+	/** A loading-screen transition still "running" after this long is treated as stuck. */
+	private static final int STUCK_TRANSITION_TICKS = 15 * 20;
+	private static boolean settlePending;
+	private static int settleTicks;
+	private static int transitionTicks;
 
 	private ReloadController() {
 	}
@@ -91,6 +99,8 @@ public final class ReloadController {
 		//    integrated server thread has stopped and closed its session.
 		state = State.CLOSING;
 		SaveRequests.reset();
+		// Closing the world to load must not trigger the "on quit" autosave.
+		AutosaveScheduler.suppressNextQuitAutosave();
 		try {
 			if (client.world != null) {
 				client.world.disconnect();
@@ -133,10 +143,38 @@ public final class ReloadController {
 		// 3. Reopen through the same path the world list uses.
 		state = State.REOPENING;
 		QuicksaveMod.LOGGER.info("Restore complete, reopening '{}'", worldName);
+		// Loading-screen mods that hook the world list (Smooth Loading Screen) get the same
+		// join transition as clicking the world; their leftovers are cleared once it settles.
+		SmoothLoadingScreenCompat.beforeReopen(client, worldName);
+		settlePending = true;
+		settleTicks = 0;
+		transitionTicks = 0;
 		try {
 			client.createIntegratedServerLoader().start(worldName, () -> client.setScreen(new TitleScreen()));
 		} finally {
 			state = State.IDLE;
+		}
+	}
+
+	/** END_CLIENT_TICK: a few seconds after a load, make sure nothing still hides the hand/HUD. */
+	public static void tick(MinecraftClient client) {
+		if (!settlePending) {
+			return;
+		}
+		if (client.world == null || client.player == null || client.currentScreen != null) {
+			settleTicks = 0;
+			return;
+		}
+		if (SmoothLoadingScreenCompat.transitionRunning()) {
+			settleTicks = 0;
+			if (++transitionTicks < STUCK_TRANSITION_TICKS) {
+				return;
+			}
+			SmoothLoadingScreenCompat.cancelTransition();
+		}
+		if (++settleTicks >= SETTLE_TICKS) {
+			settlePending = false;
+			SmoothLoadingScreenCompat.afterLoadSettled(client);
 		}
 	}
 

@@ -1,6 +1,11 @@
 package com.muto118.quicksave.selftest;
 
+import com.muto118.quicksave.QuicksaveClient;
 import com.muto118.quicksave.QuicksaveMod;
+import com.muto118.quicksave.compat.ModMenuIntegration;
+import com.muto118.quicksave.compat.SmoothLoadingScreenCompat;
+import com.muto118.quicksave.config.QuicksaveConfig;
+import com.muto118.quicksave.flow.AutosaveScheduler;
 import com.muto118.quicksave.flow.RecoveryPrompt;
 import com.muto118.quicksave.flow.ReloadController;
 import com.muto118.quicksave.flow.SaveRequests;
@@ -8,11 +13,14 @@ import com.muto118.quicksave.guard.SaveGuard;
 import com.muto118.quicksave.snapshot.SaveService;
 import com.muto118.quicksave.snapshot.SlotType;
 import com.muto118.quicksave.snapshot.SnapshotStore;
+import com.muto118.quicksave.ui.LoadMenuScreen;
 import com.muto118.quicksave.ui.QuicksaveDeathScreen;
 import com.muto118.quicksave.ui.SaveNameScreen;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.block.BedBlock;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.enums.BedPart;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.Element;
 import net.minecraft.client.gui.screen.ConfirmScreen;
@@ -20,8 +28,11 @@ import net.minecraft.client.gui.screen.DeathScreen;
 import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.MessageScreen;
 import net.minecraft.client.gui.screen.NoticeScreen;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.world.CreateWorldScreen;
+import net.minecraft.client.gui.screen.world.SelectWorldScreen;
+import net.minecraft.client.gui.screen.world.WorldListWidget;
 import net.minecraft.client.gui.screen.world.WorldCreator;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
@@ -41,8 +52,11 @@ import net.minecraft.text.TranslatableTextContent;
 import net.minecraft.util.Util;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
+import net.minecraft.world.World;
 import net.minecraft.world.gen.WorldPresets;
 import org.lwjgl.glfw.GLFW;
 
@@ -53,9 +67,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Drives Quicksave end to end inside a real client, one step per poll:
@@ -100,6 +116,14 @@ public class SelfTestClient implements ClientModInitializer {
 	private long deathScreenSeenAt = -1L;
 	private boolean sawCamPhase;
 	private boolean countdownShot;
+	private int inWorldSince = -1;
+	private boolean slsTransitionSeen;
+	private int transitionDoneAt = -1;
+	private BlockPos bedPos;
+	private String timerAutosave;
+	private String manualSlot;
+	private String renamedSlot;
+	private Set<String> slotsBefore = Set.of();
 	private boolean earlyCamShot;
 
 	@Override
@@ -129,7 +153,57 @@ public class SelfTestClient implements ClientModInitializer {
 			}
 			return false;
 		});
-		step("join world", (c, t) -> inWorld(c) && t > 100);
+		step("join world", (c, t) -> inWorld(c) && t > 20);
+		step("Start autosave on first join", (c, t) -> {
+			Optional<SnapshotStore.Slot> start = SnapshotStore.latest(worldName(c), List.of(SlotType.AUTO));
+			if (start.isPresent()) {
+				if (!"Start".equals(start.get().meta().name())) {
+					throw new IllegalStateException("first autosave isn't the Start save: " + start.get());
+				}
+				return true;
+			}
+			return false;
+		});
+		// Join the way players do: Save and Quit from the pause menu, then click the world in
+		// the Singleplayer list (some loading-screen mods, e.g. Smooth Loading Screen, only arm
+		// their transitions on these paths).
+		step("Save and Quit, back to the title screen", (c, t) -> {
+			if (t == 20) {
+				c.setScreen(new GameMenuScreen(true));
+			}
+			if (t == 25) {
+				press(c.currentScreen.children(), "menu.returnToMenu");
+			}
+			return t > 25 && c.world == null && c.currentScreen instanceof TitleScreen;
+		});
+		step("rejoin by clicking the world in the Singleplayer list", (c, t) -> {
+			if (t == 20) {
+				c.setScreen(new SelectWorldScreen(c.currentScreen));
+			}
+			if (t == 40) {
+				WorldListWidget list = (WorldListWidget) c.currentScreen.children().stream()
+						.filter(e -> e instanceof WorldListWidget).findFirst()
+						.orElseThrow(() -> new IllegalStateException("no world list"));
+				WorldListWidget.WorldEntry entry = list.children().stream()
+						.filter(e -> e instanceof WorldListWidget.WorldEntry w && WORLD.equals(w.getLevelDisplayName()))
+						.map(e -> (WorldListWidget.WorldEntry) e).findFirst()
+						.orElseThrow(() -> new IllegalStateException("world not in the list"));
+				entry.play();
+			}
+			if (t > 40 && inWorld(c)) {
+				if (this.inWorldSince < 0) {
+					this.inWorldSince = t;
+				}
+			}
+			if (this.inWorldSince >= 0 && t - this.inWorldSince > 100) {
+				List<String> hand = handProblems(c);
+				if (!hand.isEmpty()) {
+					throw new IllegalStateException("after joining from the world list: " + String.join("; ", hand));
+				}
+				return true;
+			}
+			return false;
+		});
 		step("set up gold block and pig", (c, t) -> {
 			onServer(c, player -> {
 				ServerWorld world = player.getServerWorld();
@@ -219,6 +293,27 @@ public class SelfTestClient implements ClientModInitializer {
 			return false;
 		});
 
+		step("sprint jump does not count as falling (regression)", (c, t) -> {
+			if (t == 20) {
+				c.player.setSprinting(true);
+				c.player.jump();
+			}
+			if (t == 23) {
+				if (c.player.isOnGround()) {
+					throw new IllegalStateException("player isn't airborne after jumping");
+				}
+				requestSave(c, SlotType.QUICK, null);
+			}
+			SaveService.Result result = SaveRequests.lastResult();
+			if (t > 23 && result != this.resultBefore && result != null) {
+				if (!result.success()) {
+					throw new IllegalStateException("save refused mid-jump: " + result);
+				}
+				return true;
+			}
+			return false;
+		});
+
 		// --- Saving ---
 		step("F6 quicksave", (c, t) -> {
 			if (t == 20) {
@@ -232,6 +327,142 @@ public class SelfTestClient implements ClientModInitializer {
 				}
 				SnapshotStore.Slot slot = SnapshotStore.latest(worldName(c), List.of(SlotType.QUICK)).orElseThrow();
 				log("quicksave slot " + slot.id() + " meta " + slot.meta());
+				expectThumbnail(c, slot.id());
+				return true;
+			}
+			return false;
+		});
+		step("F6 three more times: rotation keeps 3 quicksaves", (c, t) -> {
+			// t 20/60/100: change the world a little, press F6; each save must finish before the next.
+			if (t == 20 || t == 60 || t == 100) {
+				int n = t / 40;
+				onServer(c, player -> {
+					player.getServerWorld().setBlockState(this.groundPos.add(-5, 0, n), Blocks.STONE.getDefaultState());
+					return null;
+				});
+			}
+			if (t == 21 || t == 61 || t == 101) {
+				this.resultBefore = SaveRequests.lastResult();
+				pressKey(GLFW.GLFW_KEY_F6);
+			}
+			if (t == 59 || t == 99 || t == 139) {
+				SaveService.Result result = SaveRequests.lastResult();
+				if (result == this.resultBefore || result == null || !result.success()) {
+					throw new IllegalStateException("F6 save did not finish: " + result);
+				}
+				log("quicksave " + result.slot() + ": " + result.outcome().stats() + " in " + result.millis()
+						+ " ms, rotated out " + result.outcome().rotatedOut());
+				if (result.outcome().stats().hashed() >= result.outcome().stats().files()) {
+					throw new IllegalStateException("incremental save re-read every file: " + result.outcome().stats());
+				}
+			}
+			if (t == 140) {
+				long quick = countSlots(c, SlotType.QUICK);
+				if (quick != 3) {
+					throw new IllegalStateException("expected 3 rotating quicksaves, found " + quick);
+				}
+				return true;
+			}
+			return false;
+		});
+		step("timer autosave", (c, t) -> {
+			if (t == 1) {
+				this.slotsBefore = slotIds(c);
+				AutosaveScheduler.testIntervalTicks = 60;
+			}
+			SnapshotStore.Slot made = newSlot(c);
+			if (made != null) {
+				AutosaveScheduler.testIntervalTicks = 0;
+				expectAuto(made, "Autosave", "minecraft:overworld");
+				this.timerAutosave = made.id();
+				return true;
+			}
+			return false;
+		});
+		step("autosave got a thumbnail", (c, t) -> {
+			if (t < 10) {
+				return false;
+			}
+			expectThumbnail(c, this.timerAutosave);
+			return true;
+		});
+		step("dimension change autosave (Nether)", (c, t) -> {
+			if (t == 1) {
+				this.slotsBefore = slotIds(c);
+				onServer(c, player -> {
+					player.changeGameMode(GameMode.CREATIVE);
+					ServerWorld nether = player.getServer().getWorld(World.NETHER);
+					BlockPos pad = new BlockPos(0, 70, 0);
+					for (int dx = -1; dx <= 1; dx++) {
+						for (int dz = -1; dz <= 1; dz++) {
+							nether.setBlockState(pad.add(dx, -1, dz), Blocks.OBSIDIAN.getDefaultState());
+							for (int dy = 0; dy < 3; dy++) {
+								nether.setBlockState(pad.add(dx, dy, dz), Blocks.AIR.getDefaultState());
+							}
+						}
+					}
+					player.teleport(nether, 0.5, 70, 0.5, Set.of(), 0, 0);
+					return null;
+				});
+			}
+			SnapshotStore.Slot made = newSlot(c);
+			if (made != null) {
+				expectAuto(made, "Autosave (new dimension)", "minecraft:the_nether");
+				return true;
+			}
+			return false;
+		});
+		step("dimension change autosave (back home)", (c, t) -> {
+			if (t == 1) {
+				this.slotsBefore = slotIds(c);
+				onServer(c, player -> {
+					player.teleport(player.getServer().getOverworld(), this.groundPos.getX() + 0.5, this.groundPos.getY(),
+							this.groundPos.getZ() + 0.5, Set.of(), 0, 0);
+					return null;
+				});
+			}
+			SnapshotStore.Slot made = newSlot(c);
+			if (made != null) {
+				expectAuto(made, "Autosave (new dimension)", "minecraft:overworld");
+				long autos = countSlots(c, SlotType.AUTO);
+				if (autos != 3) {
+					throw new IllegalStateException("expected 3 rotating autosaves, found " + autos);
+				}
+				return true;
+			}
+			return false;
+		});
+		step("sleep autosave", (c, t) -> {
+			if (t == 1) {
+				onServer(c, player -> {
+					player.changeGameMode(GameMode.SURVIVAL);
+					player.getServer().setDifficulty(Difficulty.PEACEFUL, true);
+					ServerWorld world = player.getServerWorld();
+					world.setTimeOfDay(14000);
+					this.bedPos = this.groundPos.add(0, 0, -3);
+					world.setBlockState(this.bedPos, Blocks.RED_BED.getDefaultState()
+							.with(BedBlock.FACING, Direction.NORTH).with(BedBlock.PART, BedPart.FOOT));
+					world.setBlockState(this.bedPos.north(), Blocks.RED_BED.getDefaultState()
+							.with(BedBlock.FACING, Direction.NORTH).with(BedBlock.PART, BedPart.HEAD));
+					player.requestTeleport(this.bedPos.getX() + 0.5, this.bedPos.getY(), this.bedPos.getZ() + 1.5);
+					return null;
+				});
+			}
+			if (t == 40) {
+				this.slotsBefore = slotIds(c);
+				String failure = onServer(c, player -> player.trySleep(this.bedPos).left().map(Object::toString).orElse(null));
+				if (failure != null) {
+					throw new IllegalStateException("could not sleep: " + failure);
+				}
+			}
+			SnapshotStore.Slot made = t > 40 ? newSlot(c) : null;
+			if (made != null) {
+				expectAuto(made, "Autosave (slept)", "minecraft:overworld");
+				onServer(c, player -> {
+					player.getServer().setDifficulty(Difficulty.NORMAL, true);
+					player.requestTeleport(this.groundPos.getX() + 0.5, this.groundPos.getY(), this.groundPos.getZ() + 0.5);
+					return null;
+				});
 				return true;
 			}
 			return false;
@@ -267,9 +498,103 @@ public class SelfTestClient implements ClientModInitializer {
 				if (latest.meta().type() != SlotType.MANUAL || !MANUAL_NAME.equals(latest.meta().name())) {
 					throw new IllegalStateException("latest save is not the named manual save: " + latest);
 				}
+				this.manualSlot = latest.id();
+				expectThumbnail(c, latest.id());
 				return true;
 			}
 			return false;
+		});
+
+		step("pause menu Load opens the load menu", (c, t) -> {
+			if (t == 10) {
+				c.setScreen(new GameMenuScreen(true));
+			}
+			if (t == 15) {
+				press(c.currentScreen.children(), "quicksave.menu.load");
+			}
+			if (t == 25) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				int expected = SnapshotStore.list(worldName(c)).size();
+				if (menu.entryCount() != expected) {
+					throw new IllegalStateException("load menu shows " + menu.entryCount() + " saves, store has " + expected);
+				}
+				screenshot(c);
+				return true;
+			}
+			return false;
+		});
+		step("load menu Rename", (c, t) -> {
+			if (t == 1) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				this.renamedSlot = SnapshotStore.latest(worldName(c), List.of(SlotType.AUTO)).orElseThrow().id();
+				menu.select(this.renamedSlot);
+				press(menu.children(), "quicksave.load_menu.rename");
+			}
+			if (t == 5) {
+				SaveNameScreen prompt = (SaveNameScreen) c.currentScreen;
+				prompt.setName("Renamed by the test");
+				prompt.save();
+			}
+			if (t == 10) {
+				if (!(c.currentScreen instanceof LoadMenuScreen)) {
+					throw new IllegalStateException("Rename didn't return to the load menu: " + c.currentScreen);
+				}
+				String name = SnapshotStore.list(worldName(c)).stream().filter(slot -> slot.id().equals(this.renamedSlot))
+						.findFirst().orElseThrow().meta().name();
+				if (!"Renamed by the test".equals(name)) {
+					throw new IllegalStateException("rename didn't stick: " + name);
+				}
+				return true;
+			}
+			return false;
+		});
+		step("load menu Delete", (c, t) -> {
+			if (t == 1) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				menu.select(this.renamedSlot);
+				press(menu.children(), "quicksave.load_menu.delete");
+			}
+			if (t == 5) {
+				press(c.currentScreen.children(), "quicksave.load_menu.delete"); // the confirm button
+			}
+			if (t > 5 && SnapshotStore.list(worldName(c)).stream().noneMatch(slot -> slot.id().equals(this.renamedSlot))
+					&& c.currentScreen instanceof LoadMenuScreen menu
+					&& menu.entryCount() == SnapshotStore.list(worldName(c)).size()) {
+				assertConsistent(c);
+				c.setScreen(null);
+				return true;
+			}
+			return false;
+		});
+		step("storage cap prunes autosaves, then old quicksaves", (c, t) -> {
+			if (t == 20) {
+				log("store size before pruning: " + (SnapshotStore.store(worldName(c)).totalBytes() >> 10) + " KB");
+				QuicksaveConfig.get().maxStorageMB = 1;
+				this.resultBefore = SaveRequests.lastResult();
+				pressKey(GLFW.GLFW_KEY_F6);
+			}
+			SaveService.Result result = SaveRequests.lastResult();
+			if (t > 20 && result != this.resultBefore && result != null) {
+				QuicksaveConfig.get().maxStorageMB = 4096;
+				if (!result.success()) {
+					throw new IllegalStateException("save failed: " + result);
+				}
+				log("pruned " + result.outcome().pruned() + ", store now "
+						+ (SnapshotStore.store(worldName(c)).totalBytes() >> 10) + " KB");
+				long autos = countSlots(c, SlotType.AUTO);
+				long quicks = countSlots(c, SlotType.QUICK);
+				long manuals = countSlots(c, SlotType.MANUAL);
+				if (autos != 0 || quicks != 1 || manuals != 1) {
+					throw new IllegalStateException("after pruning: " + autos + " auto, " + quicks + " quick, " + manuals
+							+ " manual; expected 0/1/1");
+				}
+				return true;
+			}
+			return false;
+		});
+		step("object store is consistent", (c, t) -> {
+			assertConsistent(c);
+			return true;
 		});
 
 		// --- Die, death cam, countdown loads by itself ---
@@ -302,6 +627,9 @@ public class SelfTestClient implements ClientModInitializer {
 						this.sawCamPhase = true;
 					}
 				} else if (Util.getMeasuringTimeMs() - this.deathScreenSeenAt > 3500 && !this.countdownShot) {
+					if (!c.isPaused()) {
+						throw new IllegalStateException("game not paused behind the death screen (pauseOnDeathScreen)");
+					}
 					screenshot(c);
 					this.countdownShot = true;
 				}
@@ -334,6 +662,10 @@ public class SelfTestClient implements ClientModInitializer {
 					player.getServerWorld().setBlockState(this.diamondPos, Blocks.DIAMOND_BLOCK.getDefaultState());
 					return null;
 				});
+				// Leave the states that hid the hand for the user (with Smooth Loading Screen):
+				// the load must still end with the hand on screen.
+				c.gameRenderer.setRenderingPanorama(true);
+				invokeSls("juxtui.util.PanoramaAlign", "beginWorldExit");
 				pressKey(GLFW.GLFW_KEY_F9);
 			}
 			if (t > 20 && c.currentScreen instanceof ConfirmScreen confirm) {
@@ -347,12 +679,46 @@ public class SelfTestClient implements ClientModInitializer {
 			verifyRewound(c);
 			return true;
 		});
+		step("load a chosen save from the load menu", (c, t) -> {
+			if (t == 20) {
+				onServer(c, player -> {
+					player.getServerWorld().setBlockState(this.diamondPos, Blocks.DIAMOND_BLOCK.getDefaultState());
+					return null;
+				});
+				c.setScreen(new GameMenuScreen(true));
+			}
+			if (t == 25) {
+				press(c.currentScreen.children(), "quicksave.menu.load");
+			}
+			if (t == 30) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				if (!menu.select(this.manualSlot)) {
+					throw new IllegalStateException("manual save not in the load menu");
+				}
+				press(menu.children(), "quicksave.load_menu.load");
+			}
+			if (t > 30 && c.currentScreen instanceof ConfirmScreen confirm) {
+				press(confirm.children(), "gui.yes");
+				return true;
+			}
+			return false;
+		});
+		step("world reopens after loading from the menu", (c, t) -> inWorld(c) && waitInWorld(t));
+		step("verify rewind (load menu)", (c, t) -> {
+			verifyRewound(c);
+			return true;
+		});
 
 		// --- Quit while dead, rejoin ---
 		step("die again", (c, t) -> {
 			if (t < 20) {
 				return false;
 			}
+			// Death screen options: custom title, no red tint, vignette, no pause.
+			QuicksaveConfig.get().deathTitle = "Wasted";
+			QuicksaveConfig.get().deathScreenTint = false;
+			QuicksaveConfig.get().deathScreenVignette = true;
+			QuicksaveConfig.get().pauseOnDeathScreen = false;
 			onServer(c, player -> {
 				player.kill();
 				return null;
@@ -364,6 +730,18 @@ public class SelfTestClient implements ClientModInitializer {
 				if (screen.inCamPhase()) {
 					screen.mouseClicked(0, 0, 0); // a click skips the death cam
 				} else if (t > 30) {
+					if (!"Wasted".equals(screen.getTitle().getString())) {
+						throw new IllegalStateException("deathTitle not used: " + screen.getTitle().getString());
+					}
+					if (c.isPaused()) {
+						throw new IllegalStateException("paused although pauseOnDeathScreen is off");
+					}
+					screenshot(c);
+					QuicksaveConfig defaults = new QuicksaveConfig();
+					QuicksaveConfig.get().deathTitle = defaults.deathTitle;
+					QuicksaveConfig.get().deathScreenTint = defaults.deathScreenTint;
+					QuicksaveConfig.get().deathScreenVignette = defaults.deathScreenVignette;
+					QuicksaveConfig.get().pauseOnDeathScreen = defaults.pauseOnDeathScreen;
 					press(screen.children(), "quicksave.death.quit");
 					return true;
 				}
@@ -388,10 +766,33 @@ public class SelfTestClient implements ClientModInitializer {
 			if (c.currentScreen instanceof QuicksaveDeathScreen screen) {
 				if (screen.inCamPhase()) {
 					screen.mouseClicked(0, 0, 0);
-				} else if (find(screen.children(), "quicksave.death.load").active) {
-					press(screen.children(), "quicksave.death.load");
+				} else if (find(screen.children(), "quicksave.death.load_menu").active) {
+					// Load... then Back: the countdown must not fire behind the menu or after it.
+					press(screen.children(), "quicksave.death.load_menu");
 					return true;
 				}
+			}
+			return false;
+		});
+		step("Back from the death load menu, countdown stopped", (c, t) -> {
+			if (t == 10) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				screenshot(c);
+				press(menu.children(), "gui.back");
+			}
+			if (t > 10 && t < 140 && !(c.currentScreen instanceof QuicksaveDeathScreen)) {
+				throw new IllegalStateException("left the death screen without a click: " + c.currentScreen);
+			}
+			if (t == 140) {
+				QuicksaveDeathScreen screen = (QuicksaveDeathScreen) c.currentScreen;
+				press(screen.children(), "quicksave.death.load_menu");
+			}
+			if (t == 150) {
+				LoadMenuScreen menu = (LoadMenuScreen) c.currentScreen;
+				SnapshotStore.Slot newest = SnapshotStore.latest(WORLD, null).orElseThrow();
+				menu.select(newest.id());
+				press(menu.children(), "quicksave.load_menu.load"); // from the death screen: no confirm
+				return true;
 			}
 			return false;
 		});
@@ -402,21 +803,29 @@ public class SelfTestClient implements ClientModInitializer {
 		});
 
 		// --- Crash marker recovery ---
-		step("quit to title", (c, t) -> {
-			if (t < 20) {
-				return false;
+		step("Save and Quit to Title autosaves", (c, t) -> {
+			if (t == 20) {
+				this.slotsBefore = slotIds(c);
+				c.setScreen(new GameMenuScreen(true));
 			}
-			c.world.disconnect();
-			c.disconnect(new MessageScreen(Text.literal("selftest: quitting")));
-			c.setScreen(new TitleScreen());
-			return true;
+			if (t == 25) {
+				press(c.currentScreen.children(), "menu.returnToMenu");
+			}
+			if (t > 25 && c.currentScreen instanceof TitleScreen && c.world == null) {
+				List<SnapshotStore.Slot> made = SnapshotStore.list(WORLD).stream()
+						.filter(slot -> !this.slotsBefore.contains(slot.id())).toList();
+				if (made.size() != 1) {
+					throw new IllegalStateException("expected one quit autosave, got " + made);
+				}
+				expectAuto(made.get(0), "Autosave (quit)", "minecraft:overworld");
+				return true;
+			}
+			return false;
 		});
 		step("fake a crash mid-restore, roll back", (c, t) -> {
 			if (t == 20) {
 				Path worldDir = c.getLevelStorage().getSavesDirectory().resolve(WORLD);
-				Path preLoad = SnapshotStore.preLoadDir(WORLD);
-				deleteRecursively(preLoad);
-				copyTree(worldDir, preLoad.resolve("world"));
+				SnapshotStore.store(WORLD).capturePreLoad(worldDir);
 				Files.writeString(SnapshotStore.restoreMarker(WORLD), "world=" + WORLD + "\nslot=quick\n", StandardCharsets.UTF_8);
 				// A half-finished restore: junk in the world and level.dat gone.
 				Files.writeString(worldDir.resolve("junk.txt"), "half restored", StandardCharsets.UTF_8);
@@ -449,6 +858,31 @@ public class SelfTestClient implements ClientModInitializer {
 			}
 			return false;
 		});
+		step("Mod Menu config screen (Cloth Config)", (c, t) -> {
+			if (t == 10) {
+				if (!QuicksaveClient.LOAD_MENU_KEY.isUnbound()) {
+					throw new IllegalStateException("the load menu key should be unbound by default");
+				}
+				Screen config = new ModMenuIntegration().getModConfigScreenFactory().create(c.currentScreen);
+				if (config == null) {
+					throw new IllegalStateException("no config screen although Cloth Config is loaded");
+				}
+				c.setScreen(config);
+			}
+			if (t == 20) {
+				screenshot(c);
+				c.setScreen(new TitleScreen());
+				return true;
+			}
+			return false;
+		});
+		step("object store is consistent at the end", (c, t) -> {
+			List<String> problems = SnapshotStore.store(WORLD).checkConsistency();
+			if (!problems.isEmpty()) {
+				throw new IllegalStateException(String.join("; ", problems));
+			}
+			return true;
+		});
 	}
 
 	private void step(String name, StepBody body) {
@@ -458,6 +892,11 @@ public class SelfTestClient implements ClientModInitializer {
 	private void tick(MinecraftClient client) {
 		if (this.done) {
 			return;
+		}
+		if (SmoothLoadingScreenCompat.isLoaded() && !this.slsTransitionSeen) {
+			Object armed = invokeSls("juxtui.util.PanoramaAlign", "isArmed");
+			Object animating = invokeSls("juxtui.util.PanoramaAlign", "isHandoverAnimating");
+			this.slsTransitionSeen = Boolean.TRUE.equals(armed) || Boolean.TRUE.equals(animating);
 		}
 		if (this.index >= this.steps.size()) {
 			finish(client, true, "all " + this.steps.size() + " steps passed");
@@ -474,6 +913,7 @@ public class SelfTestClient implements ClientModInitializer {
 				log("ok: " + step.name());
 				this.index++;
 				this.stepTicks = 0;
+				this.transitionDoneAt = -1;
 			}
 		} catch (Throwable e) {
 			QuicksaveMod.LOGGER.error("[selftest] step '{}' failed", step.name(), e);
@@ -487,8 +927,16 @@ public class SelfTestClient implements ClientModInitializer {
 		return c.player != null && c.world != null && c.currentScreen == null && c.getServer() != null;
 	}
 
-	private static boolean waitInWorld(int ticks) {
-		return ticks > 100;
+	/** 5 s in the world, counted only once a loading-screen mod's join transition has finished. */
+	private boolean waitInWorld(int ticks) {
+		if (SmoothLoadingScreenCompat.transitionRunning()) {
+			this.transitionDoneAt = -1;
+			return false;
+		}
+		if (this.transitionDoneAt < 0 || this.transitionDoneAt > ticks) {
+			this.transitionDoneAt = ticks;
+		}
+		return ticks - this.transitionDoneAt > 100;
 	}
 
 	private static String worldName(MinecraftClient c) {
@@ -540,7 +988,59 @@ public class SelfTestClient implements ClientModInitializer {
 		return pig.getCustomName() != null && PIG_NAME.equals(pig.getCustomName().getString());
 	}
 
+	/**
+	 * Things that hide the first-person hand after a load (user report with Smooth Loading
+	 * Screen): a panorama render left on, F1-hidden HUD, a third-person camera, or that mod's
+	 * HUD/hand alpha stuck below 1.
+	 */
+	private static List<String> handProblems(MinecraftClient c) {
+		List<String> f = new ArrayList<>();
+		if (c.gameRenderer.isRenderingPanorama()) {
+			f.add("GameRenderer is still rendering a panorama (hand and HUD hidden)");
+		}
+		if (c.options.hudHidden) {
+			f.add("HUD hidden (F1 state) after the load");
+		}
+		if (c.gameRenderer.getCamera().isThirdPerson() && c.options.getPerspective().isFirstPerson()) {
+			f.add("camera stuck in third person");
+		}
+		Float slsAlpha = smoothLoadingScreenHudAlpha();
+		if (slsAlpha != null && slsAlpha < 0.999F) {
+			f.add("Smooth Loading Screen hudAlpha is " + slsAlpha + " (hand withdrawn)");
+		}
+		return f;
+	}
+
+	/** Calls a no-arg static method of Smooth Loading Screen; null when that mod isn't installed. */
+	private static Object invokeSls(String className, String method) {
+		if (!SmoothLoadingScreenCompat.isLoaded()) {
+			return null;
+		}
+		try {
+			return Class.forName(className).getMethod(method).invoke(null);
+		} catch (ReflectiveOperationException | LinkageError e) {
+			throw new IllegalStateException("Smooth Loading Screen API changed: " + className + "." + method, e);
+		}
+	}
+
+	/** Smooth Loading Screen's PanoramaAlign.hudAlpha(), or null when that mod isn't installed. */
+	private static Float smoothLoadingScreenHudAlpha() {
+		try {
+			return (Float) Class.forName("juxtui.util.PanoramaAlign").getMethod("hudAlpha").invoke(null);
+		} catch (ReflectiveOperationException | LinkageError e) {
+			return null;
+		}
+	}
+
 	private void verifyRewound(MinecraftClient c) throws Exception {
+		if (SmoothLoadingScreenCompat.isLoaded() && !this.slsTransitionSeen) {
+			throw new IllegalStateException("Smooth Loading Screen's join transition was not armed for this load");
+		}
+		this.slsTransitionSeen = false;
+		List<String> hand = handProblems(c);
+		if (!hand.isEmpty()) {
+			throw new IllegalStateException("after the load: " + String.join("; ", hand));
+		}
 		List<String> failures = onServer(c, player -> {
 			List<String> f = new ArrayList<>();
 			ServerWorld world = player.getServerWorld();
@@ -563,8 +1063,11 @@ public class SelfTestClient implements ClientModInitializer {
 			return f;
 		});
 		String world = worldName(c);
-		if (!Files.isRegularFile(SnapshotStore.preLoadDir(world).resolve("world").resolve("level.dat"))) {
-			failures.add("_pre_load/world/level.dat missing");
+		if (!Files.isRegularFile(SnapshotStore.preLoadDir(world).resolve("manifest.json"))) {
+			failures.add("_pre_load/manifest.json missing");
+		}
+		if (SnapshotStore.list(world).stream().anyMatch(slot -> "Autosave (quit)".equals(slot.meta().name()))) {
+			failures.add("closing the world for a load made an 'on quit' autosave");
 		}
 		if (Files.exists(SnapshotStore.restoreMarker(world))) {
 			failures.add("restore.inprogress marker left behind");
@@ -574,6 +1077,43 @@ public class SelfTestClient implements ClientModInitializer {
 		}
 		if (!failures.isEmpty()) {
 			throw new IllegalStateException(String.join("; ", failures));
+		}
+	}
+
+	private static Set<String> slotIds(MinecraftClient c) {
+		return SnapshotStore.list(worldName(c)).stream().map(SnapshotStore.Slot::id).collect(Collectors.toSet());
+	}
+
+	/** The newest slot that wasn't there when {@link #slotsBefore} was taken, or null. */
+	private SnapshotStore.Slot newSlot(MinecraftClient c) {
+		return SnapshotStore.list(worldName(c)).stream()
+				.filter(slot -> !this.slotsBefore.contains(slot.id()))
+				.findFirst().orElse(null);
+	}
+
+	private static long countSlots(MinecraftClient c, SlotType type) {
+		return SnapshotStore.list(worldName(c)).stream().filter(slot -> slot.meta().type() == type).count();
+	}
+
+	private static void expectAuto(SnapshotStore.Slot slot, String name, String dimension) {
+		log("autosave " + slot.id() + ": " + slot.meta().name() + " in " + slot.meta().dimension());
+		if (slot.meta().type() != SlotType.AUTO || !name.equals(slot.meta().name())
+				|| !dimension.equals(slot.meta().dimension())) {
+			throw new IllegalStateException("expected autosave '" + name + "' in " + dimension + ", got " + slot.meta());
+		}
+	}
+
+	private static void expectThumbnail(MinecraftClient c, String slot) throws Exception {
+		Path thumb = SnapshotStore.store(worldName(c)).thumbnail(slot);
+		if (!Files.isRegularFile(thumb) || Files.size(thumb) < 1000) {
+			throw new IllegalStateException("no thumbnail for " + slot);
+		}
+	}
+
+	private static void assertConsistent(MinecraftClient c) throws Exception {
+		List<String> problems = SnapshotStore.store(worldName(c)).checkConsistency();
+		if (!problems.isEmpty()) {
+			throw new IllegalStateException(String.join("; ", problems));
 		}
 	}
 

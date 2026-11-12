@@ -11,15 +11,42 @@ import net.minecraft.text.Text;
 import org.jetbrains.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 
-/** Pause menu "Save": name a manual save. An empty name gets a date-based label. */
+import java.util.function.Consumer;
+
+/**
+ * A one-line name prompt. Used by the pause menu "Save" (name a manual save; empty
+ * gets a date-based label) and by the load menu's Rename.
+ */
 public class SaveNameScreen extends Screen {
 	@Nullable
 	private final Screen parent;
+	private final String initial;
+	private final Text confirmText;
+	private final Consumer<String> onConfirm;
+	private final boolean allowEmpty;
 	private TextFieldWidget nameField;
+	private ButtonWidget confirmButton;
 
+	/** Pause menu Save: closes to the game and starts a manual save. */
 	public SaveNameScreen(@Nullable Screen parent) {
-		super(Text.translatable("quicksave.save_name.title"));
+		this(parent, Text.translatable("quicksave.save_name.title"), "", Text.translatable("quicksave.save_name.save"), true,
+				null);
+	}
+
+	/**
+	 * @param onConfirm gets the trimmed name; null means "manual save" (close the screen, then save)
+	 */
+	public SaveNameScreen(@Nullable Screen parent, Text title, String initial, Text confirmText, boolean allowEmpty,
+			@Nullable Consumer<String> onConfirm) {
+		super(title);
 		this.parent = parent;
+		this.initial = initial;
+		this.confirmText = confirmText;
+		this.allowEmpty = allowEmpty;
+		this.onConfirm = onConfirm != null ? onConfirm : name -> {
+			this.client.setScreen(null);
+			SaveRequests.request(this.client, SlotType.MANUAL, name.isEmpty() ? null : name);
+		};
 	}
 
 	@Override
@@ -28,22 +55,31 @@ public class SaveNameScreen extends Screen {
 				Text.translatable("quicksave.save_name.field"));
 		this.nameField.setMaxLength(64);
 		this.nameField.setPlaceholder(Text.translatable("quicksave.save_name.placeholder"));
+		this.nameField.setText(this.initial);
+		this.nameField.setChangedListener(text -> this.updateButton());
 		this.addDrawableChild(this.nameField);
-		this.addDrawableChild(ButtonWidget.builder(Text.translatable("quicksave.save_name.save"), button -> this.save())
+		this.confirmButton = this.addDrawableChild(ButtonWidget.builder(this.confirmText, button -> this.save())
 				.dimensions(this.width / 2 - 100, this.height / 2 + 10, 98, 20).build());
 		this.addDrawableChild(ButtonWidget.builder(ScreenTexts.CANCEL, button -> this.close())
 				.dimensions(this.width / 2 + 2, this.height / 2 + 10, 98, 20).build());
 		this.setInitialFocus(this.nameField);
+		this.updateButton();
+	}
+
+	private void updateButton() {
+		this.confirmButton.active = this.allowEmpty || !this.nameField.getText().isBlank();
 	}
 
 	public void setName(String name) {
 		this.nameField.setText(name);
 	}
 
+	/** Confirm (the Save / Rename button). */
 	public void save() {
-		String name = this.nameField.getText();
-		this.client.setScreen(null);
-		SaveRequests.request(this.client, SlotType.MANUAL, name.isBlank() ? null : name);
+		if (!this.confirmButton.active) {
+			return;
+		}
+		this.onConfirm.accept(this.nameField.getText().trim());
 	}
 
 	@Override

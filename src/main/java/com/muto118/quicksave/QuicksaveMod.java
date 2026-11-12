@@ -3,6 +3,7 @@ package com.muto118.quicksave;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.muto118.quicksave.config.QuicksaveConfig;
+import com.muto118.quicksave.flow.AutosaveScheduler;
 import com.muto118.quicksave.guard.SaveGuard;
 import com.muto118.quicksave.snapshot.SaveService;
 import com.muto118.quicksave.snapshot.SlotType;
@@ -30,6 +31,7 @@ public class QuicksaveMod implements ModInitializer {
 	public void onInitialize() {
 		QuicksaveConfig.load();
 		SaveGuard.register();
+		AutosaveScheduler.register();
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			if (server.isDedicated()) {

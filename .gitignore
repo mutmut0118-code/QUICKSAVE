@@ -11,3 +11,4 @@ run/
 bin/
 .DS_Store
 remappedSrc/
+logs/
